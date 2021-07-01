@@ -18,6 +18,7 @@ add_library (task STATIC CLI2.cpp CLI2.h
                   TLSClient.cpp TLSClient.h
                   Variant.cpp Variant.h
                   ViewTask.cpp ViewTask.h
+                  Operation.cpp Operation.h
                   dependency.cpp
                   feedback.cpp
                   legacy.cpp

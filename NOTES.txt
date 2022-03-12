@@ -1,0 +1,33 @@
+## WIP
+
+Working on wrapping replica, task, enough to start on phase 2.
+
+## Tricky Bit
+
+TW treats Tasks as k/v maps, without any ties to storage.  They can be
+created, copied, and modified at will, and the k/v map is exposed and deeply
+used by other parts of TW (rather than purpose-specific methods like
+get_description).  Tasks modifications involve creating a new task and diffing
+old and new to determine what to change.
+
+TC tasks are immutable, except by submitting an operation to a replica.  They
+cannot be (easily) copied.
+
+## PLAN
+
+* Introduce TC in the `tc` namespace
+* Wrap existing functionality with that, allowing for massive inefficiency
+
+    * context.tdb2 embeds a tc::Replica
+    * Task embeds an optional pointer to a tc::Task, deleted on copy.  On
+      construction from a tc::Task, get the whole k/v map into a C++ data
+      structure.
+    * Get read-only ops working with this model (using ta to modify for
+      testing)
+    * For write operations, use https://github.com/taskchampion/taskchampion/issues/348
+
+* Begin refactoring to use "inner" functionality.
+
+## TODO
+
+* figure out how to link so it will work outside my home directory

@@ -143,6 +143,12 @@ if (SOLARIS)
   endif (NSL_LIBRARY)
 endif (SOLARIS)
 
+message ("-- Configuring TaskChampion")
+# TODO: find a real path here :)
+set (TASK_INCLUDE_DIRS ${TASK_INCLUDE_DIRS} /home/dustin/p/taskchampion/lib)
+# TODO: dependent libraries are per-platform
+set (TASK_LIBRARIES    ${TASK_LIBRARIES}    /home/dustin/p/taskchampion/target/debug/libtaskchampion.a dl pthread)
+
 message ("-- Configuring cmake.h")
 configure_file (
   ${CMAKE_SOURCE_DIR}/cmake.h.in
@@ -150,6 +156,7 @@ configure_file (
 
 add_subdirectory (src)
 add_subdirectory (src/commands)
+add_subdirectory (src/tc)
 add_subdirectory (src/columns)
 add_subdirectory (doc)
 add_subdirectory (scripts)
@@ -185,7 +192,7 @@ set (CPACK_SOURCE_IGNORE_FILES  "CMakeCache" "CMakeFiles" "CPackConfig" "CPackSo
                                 "_CPack_Packages" "cmake_install" "install_manifest" "Makefile$"
                                 "test" "package-config" "misc/*" "src/task$" "src/calc$" "performance"
                                 "src/libtask.a" "src/columns/libcolumns.a" "src/commands/libcommands.a"
-                                "swp$" "src/lex$" "task-.*.tar.gz" "commit.h" "cmake.h$" "\\\\.gitmodules"
-                                "src/libshared/\\\\.git" ".github/" ".*\\\\.gitignore$"
+                                "src/tc/libtc.a" "swp$" "src/lex$" "task-.*.tar.gz" "commit.h" "cmake.h$"
+                                "\\\\.gitmodules" "src/libshared/\\\\.git" ".github/" ".*\\\\.gitignore$"
                                 "src/liblibshared.a" "docker-compose.yml" "\\\\.git/")
 include (CPack)

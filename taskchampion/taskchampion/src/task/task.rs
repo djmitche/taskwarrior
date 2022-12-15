@@ -379,7 +379,6 @@ impl<'r> TaskMut<'r> {
     /// `modified` timestamp.
     pub fn set_value<S: Into<String>>(&mut self, property: S, value: Option<String>) -> Result<()> {
         let property = property.into();
-        println!("set_value {:?} {:?}", property, value);
 
         if &property == "modified" {
             self.updated_modified = true;
@@ -522,7 +521,6 @@ impl<'r> TaskMut<'r> {
 
     fn update_modified(&mut self) -> Result<()> {
         if !self.updated_modified {
-            println!("update_modified updating");
             let now = format!("{}", Utc::now().timestamp());
             trace!("task {}: set property modified={:?}", self.task.uuid, now);
             self.task.taskmap =
@@ -535,7 +533,6 @@ impl<'r> TaskMut<'r> {
 
     fn set_string<S: Into<String>>(&mut self, property: S, value: Option<String>) -> Result<()> {
         let property = property.into();
-        println!("set_string {:?} {:?}", property, value);
         // update the modified timestamp unless we are setting it explicitly
         if &property != "modified" {
             self.update_modified()?;

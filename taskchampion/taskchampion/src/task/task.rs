@@ -372,8 +372,18 @@ impl<'r> TaskMut<'r> {
     }
 
     /// Set a tasks's property by name.
+    ///
+    /// This will not automatically update the `modified` timestamp or perform any other
+    /// "automatic" operations -- it simply sets the property. Howerver, if property is
+    /// "modified", then subsequent calls to other `set_..` methods will not update the
+    /// `modified` timestamp.
     pub fn set_value<S: Into<String>>(&mut self, property: S, value: Option<String>) -> Result<()> {
         let property = property.into();
+        println!("set_value {:?} {:?}", property, value);
+
+        if &property == "modified" {
+            self.updated_modified = true;
+        }
 
         if let Some(ref v) = value {
             trace!("task {}: set property {}={:?}", self.task.uuid, property, v);
@@ -512,6 +522,7 @@ impl<'r> TaskMut<'r> {
 
     fn update_modified(&mut self) -> Result<()> {
         if !self.updated_modified {
+            println!("update_modified updating");
             let now = format!("{}", Utc::now().timestamp());
             trace!("task {}: set property modified={:?}", self.task.uuid, now);
             self.task.taskmap =
@@ -524,7 +535,8 @@ impl<'r> TaskMut<'r> {
 
     fn set_string<S: Into<String>>(&mut self, property: S, value: Option<String>) -> Result<()> {
         let property = property.into();
-        // updated the modified timestamp unless we are setting it explicitly
+        println!("set_string {:?} {:?}", property, value);
+        // update the modified timestamp unless we are setting it explicitly
         if &property != "modified" {
             self.update_modified()?;
         }
@@ -1187,5 +1199,18 @@ mod test {
         assert!(!t2.has_tag(&stag(SyntheticTag::Blocked)));
         assert!(t2.has_tag(&stag(SyntheticTag::Unblocked)));
         assert!(t2.has_tag(&stag(SyntheticTag::Blocking)));
+    }
+
+    #[test]
+    fn set_value_modiifed() {
+        with_mut_task(|mut task| {
+            // set the modified property to something in the past..
+            task.set_value("modified", Some("1671820000".into()))
+                .unwrap();
+            // update another property
+            task.set_description("fun times".into()).unwrap();
+            // verify the modified property was not updated
+            assert_eq!(task.get_value("modified").unwrap(), "1671820000")
+        })
     }
 }

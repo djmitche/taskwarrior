@@ -8,6 +8,10 @@ use std::str::FromStr;
 use taskchampion::chrono::{TimeZone, Utc};
 use taskchampion::{Annotation, Tag, Task, TaskMut, Uuid};
 
+#[ffizz_header::item]
+#[ffizz(order = 800)]
+/// ***** TCTask *****
+///
 /// A task, as publicly exposed by this library.
 ///
 /// A task begins in "immutable" mode.  It must be converted to "mutable" mode
@@ -37,6 +41,10 @@ use taskchampion::{Annotation, Tag, Task, TaskMut, Uuid};
 /// Once passed to tc_task_free, a `*TCTask` becomes  invalid and must not be used again.
 ///
 /// TCTasks are not threadsafe.
+///
+/// ```c
+/// typedef struct TCTask TCTask;
+/// ```
 pub struct TCTask {
     /// The wrapped Task or TaskMut
     inner: Inner,
@@ -169,23 +177,40 @@ impl TryFrom<RustString<'static>> for Tag {
     }
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 810)]
+/// ***** TCTaskList *****
+///
 /// TCTaskList represents a list of tasks.
 ///
 /// The content of this struct must be treated as read-only: no fields or anything they reference
 /// should be modified directly by C code.
 ///
 /// When an item is taken from this list, its pointer in `items` is set to NULL.
+///
+/// ```c
+/// typedef struct TCTaskList {
+///   // number of tasks in items
+///   size_t len;
+///   // reserved
+///   size_t _u1;
+///   // Array of pointers representing each task. These remain owned by the TCTaskList instance and
+///   // will be freed by tc_task_list_free.  This pointer is never NULL for a valid TCTaskList.
+///   // Pointers in the array may be NULL after `tc_task_list_take`.
+///   struct TCTask **items;
+/// } TCTaskList;
+/// ```
 #[repr(C)]
 pub struct TCTaskList {
     /// number of tasks in items
     len: libc::size_t,
 
     /// total size of items (internal use only)
-    _capacity: libc::size_t,
+    capacity: libc::size_t,
 
-    /// array of pointers representing each task. these remain owned by the TCTaskList instance and
-    /// will be freed by tc_task_list_free.  This pointer is never NULL for a valid TCTaskList,
-    /// and the *TCTaskList at indexes 0..len-1 are not NULL.
+    /// Array of pointers representing each task. These remain owned by the TCTaskList instance and
+    /// will be freed by tc_task_list_free.  This pointer is never NULL for a valid TCTaskList.
+    /// Pointers in the array may be NULL after `tc_task_list_take`.
     items: *mut Option<NonNull<TCTask>>,
 }
 
@@ -195,7 +220,7 @@ impl CList for TCTaskList {
     unsafe fn from_raw_parts(items: *mut Self::Element, len: usize, cap: usize) -> Self {
         TCTaskList {
             len,
-            _capacity: cap,
+            capacity: cap,
             items,
         }
     }
@@ -210,54 +235,17 @@ impl CList for TCTaskList {
     }
 
     fn into_raw_parts(self) -> (*mut Self::Element, usize, usize) {
-        (self.items, self.len, self._capacity)
+        (self.items, self.len, self.capacity)
     }
 }
 
-/// Convert an immutable task into a mutable task.
-///
-/// The task must not be NULL. It is modified in-place, and becomes mutable.
-///
-/// The replica must not be NULL. After this function returns, the replica _cannot be used at all_
-/// until this task is made immutable again.  This implies that it is not allowed for more than one
-/// task associated with a replica to be mutable at any time.
-///
-/// Typical mutation of tasks is bracketed with `tc_task_to_mut` and `tc_task_to_immut`:
+#[ffizz_header::item]
+#[ffizz(order = 801)]
+/// Get a task's UUID.
 ///
 /// ```c
-/// tc_task_to_mut(task, rep);
-/// success = tc_task_done(task);
-/// tc_task_to_immut(task, rep);
-/// if (!success) { ... }
+/// extern "C" struct TCUuid tc_task_get_uuid(struct TCTask *task);
 /// ```
-#[no_mangle]
-pub unsafe extern "C" fn tc_task_to_mut(task: *mut TCTask, tcreplica: *mut TCReplica) {
-    // SAFETY:
-    //  - task is not null (promised by caller)
-    //  - task outlives 'a (promised by caller)
-    let tctask: &mut TCTask = unsafe { TCTask::from_ptr_arg_ref_mut(task) };
-    // SAFETY:
-    //  - tcreplica is not NULL (promised by caller)
-    //  - tcreplica lives until later call to to_immut via tc_task_to_immut (promised by caller,
-    //    who cannot call tc_replica_free during this time)
-    unsafe { tctask.to_mut(tcreplica) };
-}
-
-/// Convert a mutable task into an immutable task.
-///
-/// The task must not be NULL.  It is modified in-place, and becomes immutable.
-///
-/// The replica passed to `tc_task_to_mut` may be used freely after this call.
-#[no_mangle]
-pub unsafe extern "C" fn tc_task_to_immut(task: *mut TCTask) {
-    // SAFETY:
-    //  - task is not null (promised by caller)
-    //  - task outlives 'a (promised by caller)
-    let tctask: &mut TCTask = unsafe { TCTask::from_ptr_arg_ref_mut(task) };
-    tctask.to_immut();
-}
-
-/// Get a task's UUID.
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_uuid(task: *mut TCTask) -> TCUuid {
     wrap(task, |task| {
@@ -267,15 +255,27 @@ pub unsafe extern "C" fn tc_task_get_uuid(task: *mut TCTask) -> TCUuid {
     })
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Get a task's status.
+///
+/// ```c
+/// extern "C" enum TCStatus tc_task_get_status(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_status(task: *mut TCTask) -> TCStatus {
     wrap(task, |task| task.get_status().into())
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Get the underlying key/value pairs for this task.  The returned TCKVList is
 /// a "snapshot" of the task and will not be updated if the task is subsequently
 /// modified.  It is the caller's responsibility to free the TCKVList.
+///
+/// ```c
+/// extern "C" struct TCKVList tc_task_get_taskmap(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_taskmap(task: *mut TCTask) -> TCKVList {
     wrap(task, |task| {
@@ -294,7 +294,13 @@ pub unsafe extern "C" fn tc_task_get_taskmap(task: *mut TCTask) -> TCKVList {
     })
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Get a task's description.
+///
+/// ```c
+/// extern "C" struct TCString tc_task_get_description(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_description(task: *mut TCTask) -> TCString {
     wrap(task, |task| {
@@ -305,8 +311,14 @@ pub unsafe extern "C" fn tc_task_get_description(task: *mut TCTask) -> TCString 
     })
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Get a task property's value, or NULL if the task has no such property, (including if the
 /// property name is not valid utf-8).
+///
+/// ```c
+/// extern "C" struct TCString tc_task_get_value(struct TCTask *task, struct TCString property);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_value(task: *mut TCTask, property: TCString) -> TCString {
     // SAFETY:
@@ -326,50 +338,98 @@ pub unsafe extern "C" fn tc_task_get_value(task: *mut TCTask, property: TCString
     })
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Get the entry timestamp for a task (when it was created), or 0 if not set.
+///
+/// ```c
+/// extern "C" time_t tc_task_get_entry(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_entry(task: *mut TCTask) -> libc::time_t {
     wrap(task, |task| libc::time_t::as_ctype(task.get_entry()))
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Get the wait timestamp for a task, or 0 if not set.
+///
+/// ```c
+/// extern "C" time_t tc_task_get_wait(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_wait(task: *mut TCTask) -> libc::time_t {
     wrap(task, |task| libc::time_t::as_ctype(task.get_wait()))
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Get the modified timestamp for a task, or 0 if not set.
+///
+/// ```c
+/// extern "C" time_t tc_task_get_modified(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_modified(task: *mut TCTask) -> libc::time_t {
     wrap(task, |task| libc::time_t::as_ctype(task.get_modified()))
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Check if a task is waiting.
+///
+/// ```c
+/// extern "C" bool tc_task_is_waiting(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_is_waiting(task: *mut TCTask) -> bool {
     wrap(task, |task| task.is_waiting())
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Check if a task is active (started and not stopped).
+///
+/// ```c
+/// extern "C" bool tc_task_is_active(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_is_active(task: *mut TCTask) -> bool {
     wrap(task, |task| task.is_active())
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Check if a task is blocked (depends on at least one other task).
+///
+/// ```c
+/// extern "C" bool tc_task_is_blocked(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_is_blocked(task: *mut TCTask) -> bool {
     wrap(task, |task| task.is_blocked())
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Check if a task is blocking (at least one other task depends on it).
+///
+/// ```c
+/// extern "C" bool tc_task_is_blocking(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_is_blocking(task: *mut TCTask) -> bool {
     wrap(task, |task| task.is_blocking())
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Check if a task has the given tag.  If the tag is invalid, this function will return false, as
 /// that (invalid) tag is not present. No error will be reported via `tc_task_error`.
+///
+/// ```c
+/// extern "C" bool tc_task_has_tag(struct TCTask *task, struct TCString tag);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_has_tag(task: *mut TCTask, tag: TCString) -> bool {
     // SAFETY:
@@ -385,10 +445,16 @@ pub unsafe extern "C" fn tc_task_has_tag(task: *mut TCTask, tag: TCString) -> bo
     })
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Get the tags for the task.
 ///
 /// The caller must free the returned TCStringList instance.  The TCStringList instance does not
 /// reference the task and the two may be freed in any order.
+///
+/// ```c
+/// extern "C" struct TCStringList tc_task_get_tags(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_tags(task: *mut TCTask) -> TCStringList {
     wrap(task, |task| {
@@ -406,10 +472,16 @@ pub unsafe extern "C" fn tc_task_get_tags(task: *mut TCTask) -> TCStringList {
     })
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Get the annotations for the task.
 ///
 /// The caller must free the returned TCAnnotationList instance.  The TCStringList instance does not
 /// reference the task and the two may be freed in any order.
+///
+/// ```c
+/// extern "C" struct TCAnnotationList tc_task_get_annotations(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_annotations(task: *mut TCTask) -> TCAnnotationList {
     wrap(task, |task| {
@@ -426,9 +498,15 @@ pub unsafe extern "C" fn tc_task_get_annotations(task: *mut TCTask) -> TCAnnotat
     })
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Get the named UDA from the task.
 ///
 /// Returns a TCString with NULL ptr field if the UDA does not exist.
+///
+/// ```c
+/// extern "C" struct TCString tc_task_get_uda(struct TCTask *task, struct TCString ns, struct TCString key);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_uda(
     task: *mut TCTask,
@@ -453,9 +531,15 @@ pub unsafe extern "C" fn tc_task_get_uda(
     })
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Get the named legacy UDA from the task.
 ///
 /// Returns NULL if the UDA does not exist.
+///
+/// ```c
+/// extern "C" struct TCString tc_task_get_legacy_uda(struct TCTask *task, struct TCString key);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_legacy_uda(task: *mut TCTask, key: TCString) -> TCString {
     wrap(task, |task| {
@@ -473,9 +557,15 @@ pub unsafe extern "C" fn tc_task_get_legacy_uda(task: *mut TCTask, key: TCString
     })
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Get all UDAs for this task.
 ///
 /// Legacy UDAs are represented with an empty string in the ns field.
+///
+/// ```c
+/// extern "C" struct TCUdaList tc_task_get_udas(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_udas(task: *mut TCTask) -> TCUdaList {
     wrap(task, |task| {
@@ -499,10 +589,16 @@ pub unsafe extern "C" fn tc_task_get_udas(task: *mut TCTask) -> TCUdaList {
     })
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
 /// Get all UDAs for this task.
 ///
 /// All TCUdas in this list have a NULL ns field.  The entire UDA key is
 /// included in the key field.  The caller must free the returned list.
+///
+/// ```c
+/// extern "C" struct TCUdaList tc_task_get_legacy_udas(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_legacy_udas(task: *mut TCTask) -> TCUdaList {
     wrap(task, |task| {
@@ -526,7 +622,70 @@ pub unsafe extern "C" fn tc_task_get_legacy_udas(task: *mut TCTask) -> TCUdaList
     })
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 801)]
+/// Get all dependencies for a task.
+///
+/// ```c
+/// extern "C" struct TCUuidList tc_task_get_dependencies(struct TCTask *task);
+/// ```
+#[no_mangle]
+pub unsafe extern "C" fn tc_task_get_dependencies(task: *mut TCTask) -> TCUuidList {
+    wrap(task, |task| {
+        let vec: Vec<TCUuid> = task
+            .get_dependencies()
+            .map(|u| {
+                // SAFETY:
+                //  - value is not allocated
+                unsafe { TCUuid::return_val(u) }
+            })
+            .collect();
+        // SAFETY:
+        //  - caller will free this list
+        unsafe { TCUuidList::return_val(vec) }
+    })
+}
+
+#[ffizz_header::item]
+#[ffizz(order = 802)]
+/// Convert an immutable task into a mutable task.
+///
+/// The task must not be NULL. It is modified in-place, and becomes mutable.
+///
+/// The replica must not be NULL. After this function returns, the replica _cannot be used at all_
+/// until this task is made immutable again.  This implies that it is not allowed for more than one
+/// task associated with a replica to be mutable at any time.
+///
+/// Typical mutation of tasks is bracketed with `tc_task_to_mut` and `tc_task_to_immut`:
+///
+///     tc_task_to_mut(task, rep);
+///     success = tc_task_done(task);
+///     tc_task_to_immut(task, rep);
+///     if (!success) { ... }
+///
+/// ```c
+/// extern "C" void tc_task_to_mut(struct TCTask *task, struct TCReplica *tcreplica);
+/// ```
+#[no_mangle]
+pub unsafe extern "C" fn tc_task_to_mut(task: *mut TCTask, tcreplica: *mut TCReplica) {
+    // SAFETY:
+    //  - task is not null (promised by caller)
+    //  - task outlives 'a (promised by caller)
+    let tctask: &mut TCTask = unsafe { TCTask::from_ptr_arg_ref_mut(task) };
+    // SAFETY:
+    //  - tcreplica is not NULL (promised by caller)
+    //  - tcreplica lives until later call to to_immut via tc_task_to_immut (promised by caller,
+    //    who cannot call tc_replica_free during this time)
+    unsafe { tctask.to_mut(tcreplica) };
+}
+
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Set a mutable task's status.
+///
+/// ```c
+/// extern "C" TCResult tc_task_set_status(struct TCTask *task, enum TCStatus status);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_status(task: *mut TCTask, status: TCStatus) -> TCResult {
     wrap_mut(
@@ -539,7 +698,13 @@ pub unsafe extern "C" fn tc_task_set_status(task: *mut TCTask, status: TCStatus)
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Set a mutable task's property value by name.  If value.ptr is NULL, the property is removed.
+///
+/// ```c
+/// extern "C" TCResult tc_task_set_value(struct TCTask *task, struct TCString property, struct TCString value);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_value(
     task: *mut TCTask,
@@ -573,7 +738,13 @@ pub unsafe extern "C" fn tc_task_set_value(
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Set a mutable task's description.
+///
+/// ```c
+/// extern "C" TCResult tc_task_set_description(struct TCTask *task, struct TCString description);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_description(
     task: *mut TCTask,
@@ -593,8 +764,14 @@ pub unsafe extern "C" fn tc_task_set_description(
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Set a mutable task's entry (creation time).  Pass entry=0 to unset
 /// the entry field.
+///
+/// ```c
+/// extern "C" TCResult tc_task_set_entry(struct TCTask *task, time_t entry);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_entry(task: *mut TCTask, entry: libc::time_t) -> TCResult {
     wrap_mut(
@@ -608,7 +785,13 @@ pub unsafe extern "C" fn tc_task_set_entry(task: *mut TCTask, entry: libc::time_
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Set a mutable task's wait timestamp.  Pass wait=0 to unset the wait field.
+///
+/// ```c
+/// extern "C" TCResult tc_task_set_wait(struct TCTask *task, time_t wait);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_wait(task: *mut TCTask, wait: libc::time_t) -> TCResult {
     wrap_mut(
@@ -622,7 +805,13 @@ pub unsafe extern "C" fn tc_task_set_wait(task: *mut TCTask, wait: libc::time_t)
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Set a mutable task's modified timestamp.  The value cannot be zero.
+///
+/// ```c
+/// extern "C" TCResult tc_task_set_modified(struct TCTask *task, time_t modified);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_modified(
     task: *mut TCTask,
@@ -642,7 +831,13 @@ pub unsafe extern "C" fn tc_task_set_modified(
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Start a task.
+///
+/// ```c
+/// extern "C" TCResult tc_task_start(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_start(task: *mut TCTask) -> TCResult {
     wrap_mut(
@@ -655,7 +850,13 @@ pub unsafe extern "C" fn tc_task_start(task: *mut TCTask) -> TCResult {
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Stop a task.
+///
+/// ```c
+/// extern "C" TCResult tc_task_stop(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_stop(task: *mut TCTask) -> TCResult {
     wrap_mut(
@@ -668,7 +869,13 @@ pub unsafe extern "C" fn tc_task_stop(task: *mut TCTask) -> TCResult {
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Mark a task as done.
+///
+/// ```c
+/// extern "C" TCResult tc_task_done(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_done(task: *mut TCTask) -> TCResult {
     wrap_mut(
@@ -681,7 +888,13 @@ pub unsafe extern "C" fn tc_task_done(task: *mut TCTask) -> TCResult {
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Mark a task as deleted.
+///
+/// ```c
+/// extern "C" TCResult tc_task_delete(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_delete(task: *mut TCTask) -> TCResult {
     wrap_mut(
@@ -694,7 +907,13 @@ pub unsafe extern "C" fn tc_task_delete(task: *mut TCTask) -> TCResult {
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Add a tag to a mutable task.
+///
+/// ```c
+/// extern "C" TCResult tc_task_add_tag(struct TCTask *task, struct TCString tag);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_add_tag(task: *mut TCTask, tag: TCString) -> TCResult {
     // SAFETY:
@@ -712,7 +931,13 @@ pub unsafe extern "C" fn tc_task_add_tag(task: *mut TCTask, tag: TCString) -> TC
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Remove a tag from a mutable task.
+///
+/// ```c
+/// extern "C" TCResult tc_task_remove_tag(struct TCTask *task, struct TCString tag);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_remove_tag(task: *mut TCTask, tag: TCString) -> TCResult {
     // SAFETY:
@@ -730,8 +955,14 @@ pub unsafe extern "C" fn tc_task_remove_tag(task: *mut TCTask, tag: TCString) ->
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Add an annotation to a mutable task.  This call takes ownership of the
 /// passed annotation, which must not be used after the call returns.
+///
+/// ```c
+/// extern "C" TCResult tc_task_add_annotation(struct TCTask *task, struct TCAnnotation *annotation);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_add_annotation(
     task: *mut TCTask,
@@ -754,7 +985,13 @@ pub unsafe extern "C" fn tc_task_add_annotation(
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Remove an annotation from a mutable task.
+///
+/// ```c
+/// extern "C" TCResult tc_task_remove_annotation(struct TCTask *task, int64_t entry);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_remove_annotation(task: *mut TCTask, entry: i64) -> TCResult {
     wrap_mut(
@@ -767,7 +1004,16 @@ pub unsafe extern "C" fn tc_task_remove_annotation(task: *mut TCTask, entry: i64
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Set a UDA on a mutable task.
+///
+/// ```c
+/// extern "C" TCResult tc_task_set_uda(struct TCTask *task,
+///                          struct TCString ns,
+///                          struct TCString key,
+///                          struct TCString value);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_uda(
     task: *mut TCTask,
@@ -793,7 +1039,13 @@ pub unsafe extern "C" fn tc_task_set_uda(
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Remove a UDA fraom a mutable task.
+///
+/// ```c
+/// extern "C" TCResult tc_task_remove_uda(struct TCTask *task, struct TCString ns, struct TCString key);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_remove_uda(
     task: *mut TCTask,
@@ -816,7 +1068,13 @@ pub unsafe extern "C" fn tc_task_remove_uda(
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Set a legacy UDA on a mutable task.
+///
+/// ```c
+/// extern "C" TCResult tc_task_set_legacy_uda(struct TCTask *task, struct TCString key, struct TCString value);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_legacy_uda(
     task: *mut TCTask,
@@ -839,7 +1097,13 @@ pub unsafe extern "C" fn tc_task_set_legacy_uda(
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Remove a UDA fraom a mutable task.
+///
+/// ```c
+/// extern "C" TCResult tc_task_remove_legacy_uda(struct TCTask *task, struct TCString key);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_remove_legacy_uda(task: *mut TCTask, key: TCString) -> TCResult {
     // safety:
@@ -856,25 +1120,13 @@ pub unsafe extern "C" fn tc_task_remove_legacy_uda(task: *mut TCTask, key: TCStr
     )
 }
 
-/// Get all dependencies for a task.
-#[no_mangle]
-pub unsafe extern "C" fn tc_task_get_dependencies(task: *mut TCTask) -> TCUuidList {
-    wrap(task, |task| {
-        let vec: Vec<TCUuid> = task
-            .get_dependencies()
-            .map(|u| {
-                // SAFETY:
-                //  - value is not allocated
-                unsafe { TCUuid::return_val(u) }
-            })
-            .collect();
-        // SAFETY:
-        //  - caller will free this list
-        unsafe { TCUuidList::return_val(vec) }
-    })
-}
-
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Add a dependency.
+///
+/// ```c
+/// extern "C" TCResult tc_task_add_dependency(struct TCTask *task, struct TCUuid dep);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_add_dependency(task: *mut TCTask, dep: TCUuid) -> TCResult {
     // SAFETY:
@@ -890,7 +1142,13 @@ pub unsafe extern "C" fn tc_task_add_dependency(task: *mut TCTask, dep: TCUuid) 
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 803)]
 /// Remove a dependency.
+///
+/// ```c
+/// extern "C" TCResult tc_task_remove_dependency(struct TCTask *task, struct TCUuid dep);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_remove_dependency(task: *mut TCTask, dep: TCUuid) -> TCResult {
     // SAFETY:
@@ -906,9 +1164,35 @@ pub unsafe extern "C" fn tc_task_remove_dependency(task: *mut TCTask, dep: TCUui
     )
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 804)]
+/// Convert a mutable task into an immutable task.
+///
+/// The task must not be NULL.  It is modified in-place, and becomes immutable.
+///
+/// The replica passed to `tc_task_to_mut` may be used freely after this call.
+///
+/// ```c
+/// extern "C" void tc_task_to_immut(struct TCTask *task);
+/// ```
+#[no_mangle]
+pub unsafe extern "C" fn tc_task_to_immut(task: *mut TCTask) {
+    // SAFETY:
+    //  - task is not null (promised by caller)
+    //  - task outlives 'a (promised by caller)
+    let tctask: &mut TCTask = unsafe { TCTask::from_ptr_arg_ref_mut(task) };
+    tctask.to_immut();
+}
+
+#[ffizz_header::item]
+#[ffizz(order = 805)]
 /// Get the latest error for a task, or a string NULL ptr field if the last operation succeeded.
 /// Subsequent calls to this function will return NULL.  The task pointer must not be NULL.  The
 /// caller must free the returned string.
+///
+/// ```c
+/// extern "C" struct TCString tc_task_error(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_error(task: *mut TCTask) -> TCString {
     // SAFETY:
@@ -924,10 +1208,16 @@ pub unsafe extern "C" fn tc_task_error(task: *mut TCTask) -> TCString {
     }
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 806)]
 /// Free a task.  The given task must not be NULL.  The task must not be used after this function
 /// returns, and must not be freed more than once.
 ///
 /// If the task is currently mutable, it will first be made immutable.
+///
+/// ```c
+/// extern "C" void tc_task_free(struct TCTask *task);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_free(task: *mut TCTask) {
     // SAFETY:
@@ -941,6 +1231,8 @@ pub unsafe extern "C" fn tc_task_free(task: *mut TCTask) {
     drop(tctask);
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 811)]
 /// Take an item from a TCTaskList.  After this call, the indexed item is no longer associated
 /// with the list and becomes the caller's responsibility, just as if it had been returned from
 /// `tc_replica_get_task`.
@@ -950,6 +1242,10 @@ pub unsafe extern "C" fn tc_task_free(task: *mut TCTask) {
 /// index is out of bounds, this function will also return NULL.
 ///
 /// The passed TCTaskList remains owned by the caller.
+///
+/// ```c
+/// extern "C" struct TCTask *tc_task_list_take(struct TCTaskList *tasks, size_t index);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_list_take(tasks: *mut TCTaskList, index: usize) -> *mut TCTask {
     // SAFETY:
@@ -963,10 +1259,16 @@ pub unsafe extern "C" fn tc_task_list_take(tasks: *mut TCTaskList, index: usize)
     }
 }
 
+#[ffizz_header::item]
+#[ffizz(order = 811)]
 /// Free a TCTaskList instance.  The instance, and all TCTaskList it contains, must not be used after
 /// this call.
 ///
 /// When this call returns, the `items` pointer will be NULL, signalling an invalid TCTaskList.
+///
+/// ```c
+/// extern "C" void tc_task_list_free(struct TCTaskList *tasks);
+/// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_list_free(tasks: *mut TCTaskList) {
     // SAFETY:
@@ -985,7 +1287,7 @@ mod test {
         let tasks = unsafe { TCTaskList::return_val(Vec::new()) };
         assert!(!tasks.items.is_null());
         assert_eq!(tasks.len, 0);
-        assert_eq!(tasks._capacity, 0);
+        assert_eq!(tasks.capacity, 0);
     }
 
     #[test]
@@ -995,6 +1297,6 @@ mod test {
         unsafe { tc_task_list_free(&mut tasks) };
         assert!(tasks.items.is_null());
         assert_eq!(tasks.len, 0);
-        assert_eq!(tasks._capacity, 0);
+        assert_eq!(tasks.capacity, 0);
     }
 }

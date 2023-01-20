@@ -115,7 +115,7 @@ std::string tc::Task::get_description () const
 std::optional<std::string> tc::Task::get_value (std::string property) const
 {
   auto maybe_desc = tc_task_get_value (&*inner, string2tc(property));
-  if (maybe_desc.ptr == NULL) {
+  if (tc_string_is_null(&maybe_desc)) {
     return std::nullopt;
   }
   return std::make_optional(tc2string(maybe_desc));
@@ -160,8 +160,7 @@ void tc::Task::set_value (std::string property, std::optional<std::string> value
   if (value.has_value()) {
     res = tc_task_set_value (&*inner, string2tc(property), string2tc(value.value()));
   } else {
-    TCString nullstr;
-    nullstr.ptr = NULL;
+    TCString nullstr = tc_string_null();
     res = tc_task_set_value (&*inner, string2tc(property), nullstr);
   }
   if (res != TC_RESULT_OK) {
@@ -182,7 +181,7 @@ void tc::Task::set_modified (time_t modified)
 std::string tc::Task::task_error () const {
   TCString error = tc_task_error (&*inner);
   std::string errmsg;
-  if (!error.ptr) {
+  if (tc_string_is_null(&error)) {
     errmsg = std::string ("Unknown TaskChampion error");
   } else {
     errmsg = std::string (tc_string_content (&error));

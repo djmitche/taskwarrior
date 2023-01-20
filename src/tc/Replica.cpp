@@ -113,7 +113,7 @@ std::optional<tc::Task> tc::Replica::get_task (const std::string &uuid)
   TCTask *tctask = tc_replica_get_task (&*inner, uuid2tc (uuid));
   if (!tctask) {
     auto error = tc_replica_error (&*inner);
-    if (error.ptr) {
+    if (!tc_string_is_null(&error)) {
       throw replica_error (error);
     } else {
       return std::nullopt;
@@ -213,7 +213,7 @@ std::string tc::Replica::replica_error () {
 ////////////////////////////////////////////////////////////////////////////////
 std::string tc::Replica::replica_error (TCString error) {
   std::string errmsg;
-  if (!error.ptr) {
+  if (tc_string_is_null(&error)) {
     errmsg = std::string ("Unknown TaskChampion error");
   } else {
     errmsg = std::string (tc_string_content (&error));

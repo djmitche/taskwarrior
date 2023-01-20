@@ -7,7 +7,7 @@ pub use taskchampion::Status;
 /// The status of a task, as defined by the task data model.
 ///
 /// ```c
-/// typedef enum TCStatus
+/// enum TCStatus
 /// #ifdef __cplusplus
 ///   : int32_t
 /// #endif // __cplusplus
@@ -19,7 +19,7 @@ pub use taskchampion::Status;
 ///   // Unknown signifies a status in the task DB that was not
 ///   // recognized.
 ///   TC_STATUS_UNKNOWN = -1,
-/// } TCStatus;
+/// };
 /// #ifndef __cplusplus
 /// typedef int32_t TCStatus;
 /// #endif // __cplusplus

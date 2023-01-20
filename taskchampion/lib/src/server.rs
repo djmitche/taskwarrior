@@ -1,6 +1,7 @@
 use crate::traits::*;
 use crate::types::*;
-use crate::util::err_to_ruststring;
+use crate::util::err_to_fzstring;
+use ffizz_string::FzString;
 use taskchampion::{Server, ServerConfig};
 
 #[ffizz_header::item]
@@ -38,24 +39,17 @@ fn wrap<T, F>(f: F, error_out: *mut TCString, err_value: T) -> T
 where
     F: FnOnce() -> anyhow::Result<T>,
 {
-    if !error_out.is_null() {
-        // SAFETY:
-        //  - error_out is not NULL (just checked)
-        //  - properly aligned and valid (promised by caller)
-        unsafe { *error_out = TCString::default() };
-    }
-
     match f() {
-        Ok(v) => v,
+        Ok(v) => {
+            // SAFETY:
+            //  - error_out is properly aligned and valid (promised by caller)
+            unsafe { FzString::Null.to_out_param(error_out) };
+            v
+        }
         Err(e) => {
-            if !error_out.is_null() {
-                // SAFETY:
-                //  - error_out is not NULL (just checked)
-                //  - properly aligned and valid (promised by caller)
-                unsafe {
-                    TCString::val_to_arg_out(err_to_ruststring(e), error_out);
-                }
-            }
+            // SAFETY:
+            //  - error_out is properly aligned and valid (promised by caller)
+            unsafe { err_to_fzstring(e).to_out_param(error_out) };
             err_value
         }
     }
@@ -72,7 +66,7 @@ where
 /// The server must be freed after it is used - tc_replica_sync does not automatically free it.
 ///
 /// ```c
-/// extern "C" struct TCServer *tc_server_new_local(struct TCString server_dir, struct TCString *error_out);
+/// EXTERN_C struct TCServer *tc_server_new_local(struct TCString server_dir, struct TCString *error_out);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_server_new_local(
@@ -84,9 +78,9 @@ pub unsafe extern "C" fn tc_server_new_local(
             // SAFETY:
             //  - server_dir is valid (promised by caller)
             //  - caller will not use server_dir after this call (convention)
-            let mut server_dir = unsafe { TCString::val_from_arg(server_dir) };
+            let server_dir = unsafe { FzString::take(server_dir) };
             let server_config = ServerConfig::Local {
-                server_dir: server_dir.to_path_buf_mut()?,
+                server_dir: server_dir.into_path_buf_nonnull()?,
             };
             let server = server_config.into_server()?;
             // SAFETY: caller promises to free this server.
@@ -108,7 +102,7 @@ pub unsafe extern "C" fn tc_server_new_local(
 /// The server must be freed after it is used - tc_replica_sync does not automatically free it.
 ///
 /// ```c
-/// extern "C" struct TCServer *tc_server_new_remote(struct TCString origin,
+/// EXTERN_C struct TCServer *tc_server_new_remote(struct TCString origin,
 ///                                       struct TCUuid client_key,
 ///                                       struct TCString encryption_secret,
 ///                                       struct TCString *error_out);
@@ -125,17 +119,17 @@ pub unsafe extern "C" fn tc_server_new_remote(
             // SAFETY:
             //  - origin is valid (promised by caller)
             //  - origin ownership is transferred to this function
-            let origin = unsafe { TCString::val_from_arg(origin) }.into_string()?;
+            let origin = unsafe { FzString::take(origin) }.into_string_nonnull()?;
 
             // SAFETY:
             //  - client_key is a valid Uuid (any 8-byte sequence counts)
-
             let client_key = unsafe { TCUuid::val_from_arg(client_key) };
+
             // SAFETY:
             //  - encryption_secret is valid (promised by caller)
             //  - encryption_secret ownership is transferred to this function
-            let encryption_secret = unsafe { TCString::val_from_arg(encryption_secret) }
-                .as_bytes()
+            let encryption_secret = unsafe { FzString::take(encryption_secret) }
+                .as_bytes_nonnull()
                 .to_vec();
 
             let server_config = ServerConfig::Remote {
@@ -158,7 +152,7 @@ pub unsafe extern "C" fn tc_server_new_remote(
 /// more than once.
 ///
 /// ```c
-/// extern "C" void tc_server_free(struct TCServer *server);
+/// EXTERN_C void tc_server_free(struct TCServer *server);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_server_free(server: *mut TCServer) {

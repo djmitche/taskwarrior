@@ -7,7 +7,9 @@ edition = "2018"
 libc = "0.2.136"
 taskchampion = { path = "../taskchampion" }
 anyhow = "1.0"
-ffizz-header = "0.3"
+ffizz-header = { version = "0.4" }
+ffizz-string = { version = "0.4" }
+ffizz-passby = { version = "0.4" }
 
 [dev-dependencies]
 pretty_assertions = "1"

@@ -1,5 +1,6 @@
 use crate::traits::*;
 use crate::types::*;
+use ffizz_string::FzString;
 use libc;
 use taskchampion::Uuid;
 
@@ -100,7 +101,7 @@ impl CList for TCUuidList {
 /// Create a new, randomly-generated UUID.
 ///
 /// ```c
-///extern "C" struct TCUuid tc_uuid_new_v4(void);
+/// EXTERN_C struct TCUuid tc_uuid_new_v4(void);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_uuid_new_v4() -> TCUuid {
@@ -114,7 +115,7 @@ pub unsafe extern "C" fn tc_uuid_new_v4() -> TCUuid {
 /// Create a new UUID with the nil value.
 ///
 /// ```c
-/// extern "C" struct TCUuid tc_uuid_nil(void);
+/// EXTERN_C struct TCUuid tc_uuid_nil(void);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_uuid_nil() -> TCUuid {
@@ -129,7 +130,7 @@ pub unsafe extern "C" fn tc_uuid_nil() -> TCUuid {
 /// at least TC_UUID_STRING_BYTES long.  No NUL terminator is added.
 ///
 /// ```c
-/// extern "C" void tc_uuid_to_buf(struct TCUuid tcuuid, char *buf);
+/// EXTERN_C void tc_uuid_to_buf(struct TCUuid tcuuid, char *buf);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_uuid_to_buf(tcuuid: TCUuid, buf: *mut libc::c_char) {
@@ -154,7 +155,7 @@ pub unsafe extern "C" fn tc_uuid_to_buf(tcuuid: TCUuid, buf: *mut libc::c_char) 
 /// must be freed with tc_string_free.
 ///
 /// ```c
-/// extern "C" struct TCString tc_uuid_to_str(struct TCUuid tcuuid);
+/// EXTERN_C struct TCString tc_uuid_to_str(struct TCUuid tcuuid);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_uuid_to_str(tcuuid: TCUuid) -> TCString {
@@ -164,7 +165,7 @@ pub unsafe extern "C" fn tc_uuid_to_str(tcuuid: TCUuid) -> TCString {
     let s = uuid.to_string();
     // SAFETY:
     //  - caller promises to free this value.
-    unsafe { TCString::return_val(s.into()) }
+    unsafe { FzString::from(s).return_val() }
 }
 
 #[ffizz_header::item]
@@ -173,17 +174,16 @@ pub unsafe extern "C" fn tc_uuid_to_str(tcuuid: TCUuid) -> TCString {
 /// string is not valid.
 ///
 /// ```c
-/// extern "C" TCResult tc_uuid_from_str(struct TCString s, struct TCUuid *uuid_out);
+/// EXTERN_C TCResult tc_uuid_from_str(struct TCString s, struct TCUuid *uuid_out);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_uuid_from_str(s: TCString, uuid_out: *mut TCUuid) -> TCResult {
-    debug_assert!(!s.is_null());
     debug_assert!(!uuid_out.is_null());
     // SAFETY:
     //  - s is valid (promised by caller)
     //  - caller will not use s after this call (convention)
-    let mut s = unsafe { TCString::val_from_arg(s) };
-    if let Ok(s) = s.as_str() {
+    let mut s = unsafe { FzString::take(s) };
+    if let Ok(s) = s.as_str_nonnull() {
         if let Ok(u) = Uuid::parse_str(s) {
             // SAFETY:
             //  - uuid_out is not NULL (promised by caller)
@@ -203,7 +203,7 @@ pub unsafe extern "C" fn tc_uuid_from_str(s: TCString, uuid_out: *mut TCUuid) ->
 /// When this call returns, the `items` pointer will be NULL, signalling an invalid TCUuidList.
 ///
 /// ```c
-/// extern "C" void tc_uuid_list_free(struct TCUuidList *tcuuids);
+/// EXTERN_C void tc_uuid_list_free(struct TCUuidList *tcuuids);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_uuid_list_free(tcuuids: *mut TCUuidList) {

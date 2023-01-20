@@ -1,5 +1,6 @@
 use crate::traits::*;
 use crate::types::*;
+use ffizz_string::FzString;
 
 #[ffizz_header::item]
 #[ffizz(order = 600)]
@@ -23,16 +24,16 @@ pub struct TCKV {
 }
 
 impl PassByValue for TCKV {
-    type RustType = (RustString<'static>, RustString<'static>);
+    type RustType = (FzString<'static>, FzString<'static>);
 
     unsafe fn from_ctype(self) -> Self::RustType {
         // SAFETY:
         //  - self.key is not NULL (field docstring)
         //  - self.key came from return_ptr in as_ctype
         //  - self is owned, so we can take ownership of this TCString
-        let key = unsafe { TCString::val_from_arg(self.key) };
+        let key = unsafe { FzString::take(self.key) };
         // SAFETY: (same)
-        let value = unsafe { TCString::val_from_arg(self.value) };
+        let value = unsafe { FzString::take(self.value) };
         (key, value)
     }
 
@@ -40,10 +41,10 @@ impl PassByValue for TCKV {
         TCKV {
             // SAFETY:
             //  - ownership of the TCString tied to ownership of Self
-            key: unsafe { TCString::return_val(key) },
+            key: unsafe { key.return_val() },
             // SAFETY:
             //  - ownership of the TCString tied to ownership of Self
-            value: unsafe { TCString::return_val(value) },
+            value: unsafe { value.return_val() },
         }
     }
 }
@@ -115,7 +116,7 @@ impl CList for TCKVList {
 /// When this call returns, the `items` pointer will be NULL, signalling an invalid TCKVList.
 ///
 /// ```c
-/// extern "C" void tc_kv_list_free(struct TCKVList *tckvs);
+/// EXTERN_C void tc_kv_list_free(struct TCKVList *tckvs);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_kv_list_free(tckvs: *mut TCKVList) {

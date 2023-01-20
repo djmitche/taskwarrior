@@ -1,5 +1,6 @@
 use crate::traits::*;
 use crate::types::*;
+use ffizz_string::FzString;
 use taskchampion::chrono::prelude::*;
 
 #[ffizz_header::item]
@@ -40,10 +41,10 @@ pub struct TCAnnotation {
 
 impl PassByValue for TCAnnotation {
     // NOTE: we cannot use `RustType = Annotation` here because conversion of the
-    // Rust to a String can fail.
-    type RustType = (DateTime<Utc>, RustString<'static>);
+    // FzString to a String can fail.
+    type RustType = (DateTime<Utc>, FzString<'static>);
 
-    unsafe fn from_ctype(mut self) -> Self::RustType {
+    unsafe fn from_ctype(self) -> Self::RustType {
         // SAFETY:
         //  - any time_t value is valid
         //  - time_t is copy, so ownership is not important
@@ -51,8 +52,7 @@ impl PassByValue for TCAnnotation {
         // SAFETY:
         //  - self.description is valid (came from return_val in as_ctype)
         //  - self is owned, so we can take ownership of this TCString
-        let description =
-            unsafe { TCString::take_val_from_arg(&mut self.description, TCString::default()) };
+        let description = unsafe { FzString::take(self.description) };
         (entry, description)
     }
 
@@ -61,16 +61,18 @@ impl PassByValue for TCAnnotation {
             entry: libc::time_t::as_ctype(Some(entry)),
             // SAFETY:
             //  - ownership of the TCString tied to ownership of Self
-            description: unsafe { TCString::return_val(description) },
+            description: unsafe { description.return_val() },
         }
     }
 }
 
+// NOTE: https://github.com/djmitche/ffizz/issues/35 will allow this to be derived
 impl Default for TCAnnotation {
     fn default() -> Self {
         TCAnnotation {
             entry: 0 as libc::time_t,
-            description: TCString::default(),
+            // SAFETY: ownership of Null variant passes to annotation
+            description: unsafe { FzString::Null.return_val() },
         }
     }
 }
@@ -138,7 +140,7 @@ impl CList for TCAnnotationList {
 /// after this call.
 ///
 /// ```c
-/// extern "C" void tc_annotation_free(struct TCAnnotation *tcann);
+/// EXTERN_C void tc_annotation_free(struct TCAnnotation *tcann);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_annotation_free(tcann: *mut TCAnnotation) {
@@ -158,7 +160,7 @@ pub unsafe extern "C" fn tc_annotation_free(tcann: *mut TCAnnotation) {
 /// When this call returns, the `items` pointer will be NULL, signalling an invalid TCAnnotationList.
 ///
 /// ```c
-/// extern "C" void tc_annotation_list_free(struct TCAnnotationList *tcanns);
+/// EXTERN_C void tc_annotation_list_free(struct TCAnnotationList *tcanns);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_annotation_list_free(tcanns: *mut TCAnnotationList) {

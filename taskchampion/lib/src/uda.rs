@@ -1,5 +1,6 @@
 use crate::traits::*;
 use crate::types::*;
+use ffizz_string::FzString;
 
 #[ffizz_header::item]
 #[ffizz(order = 500)]
@@ -9,67 +10,68 @@ use crate::types::*;
 ///
 /// ```c
 /// typedef struct TCUda {
-///   // Namespace of the UDA.  For legacy UDAs, this may have a NULL ptr field.
+///   // Namespace of the UDA.  For legacy UDAs, this may be Null.
 ///   struct TCString ns;
-///   // UDA key.  Must not be NULL.
+///   // UDA key.  Must not be Null.
 ///   struct TCString key;
-///   // Content of the UDA.  Must not be NULL.
+///   // Content of the UDA.  Must not be Null.
 ///   struct TCString value;
 /// } TCUda;
 /// ```
 #[repr(C)]
-#[derive(Default)]
 pub struct TCUda {
-    /// Namespace of the UDA.  For legacy UDAs, this may have a NULL ptr field.
+    /// Namespace of the UDA.  For legacy UDAs, this may be Null.
     pub ns: TCString,
-    /// UDA key.  Must not be NULL.
+    /// UDA key.  Must not be Null.
     pub key: TCString,
-    /// Content of the UDA.  Must not be NULL.
+    /// Content of the UDA.  Must not be Null.
     pub value: TCString,
 }
 
 pub(crate) struct Uda {
-    pub ns: Option<RustString<'static>>,
-    pub key: RustString<'static>,
-    pub value: RustString<'static>,
+    pub ns: FzString<'static>,
+    pub key: FzString<'static>,
+    pub value: FzString<'static>,
 }
 
 impl PassByValue for TCUda {
     type RustType = Uda;
 
     unsafe fn from_ctype(self) -> Self::RustType {
+        let Self { ns, key, value } = self;
         Uda {
-            ns: if self.ns.is_null() {
-                None
-            } else {
-                // SAFETY:
-                //  - self is owned, so we can take ownership of this TCString
-                //  - self.ns is a valid, non-null TCString (NULL just checked)
-                Some(unsafe { TCString::val_from_arg(self.ns) })
-            },
             // SAFETY:
-            //  - self is owned, so we can take ownership of this TCString
-            //  - self.key is a valid, non-null TCString (see type docstring)
-            key: unsafe { TCString::val_from_arg(self.key) },
-            // SAFETY:
-            //  - self is owned, so we can take ownership of this TCString
-            //  - self.value is a valid, non-null TCString (see type docstring)
-            value: unsafe { TCString::val_from_arg(self.value) },
+            //  - field was just moved from self and is a valid fz_string_t (per type docstring)
+            ns: unsafe { FzString::take(ns) },
+            // SAFETY: (same)
+            key: unsafe { FzString::take(key) },
+            // SAFETY: (same)
+            value: unsafe { FzString::take(value) },
         }
     }
 
     fn as_ctype(uda: Uda) -> Self {
         TCUda {
             // SAFETY: caller assumes ownership of this value
-            ns: if let Some(ns) = uda.ns {
-                unsafe { TCString::return_val(ns) }
-            } else {
-                TCString::default()
-            },
+            ns: unsafe { uda.ns.return_val() },
             // SAFETY: caller assumes ownership of this value
-            key: unsafe { TCString::return_val(uda.key) },
+            key: unsafe { uda.key.return_val() },
             // SAFETY: caller assumes ownership of this value
-            value: unsafe { TCString::return_val(uda.value) },
+            value: unsafe { uda.value.return_val() },
+        }
+    }
+}
+
+// NOTE: https://github.com/djmitche/ffizz/issues/35 will allow this to be derived
+impl Default for TCUda {
+    fn default() -> Self {
+        TCUda {
+            // SAFETY: ownership of Null variant passes to annotation
+            ns: unsafe { FzString::Null.return_val() },
+            // SAFETY: same
+            key: unsafe { FzString::Null.return_val() },
+            // SAFETY: same
+            value: unsafe { FzString::Null.return_val() },
         }
     }
 }
@@ -137,7 +139,7 @@ impl CList for TCUdaList {
 /// after this call.
 ///
 /// ```c
-/// extern "C" void tc_uda_free(struct TCUda *tcuda);
+/// EXTERN_C void tc_uda_free(struct TCUda *tcuda);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_uda_free(tcuda: *mut TCUda) {
@@ -156,7 +158,7 @@ pub unsafe extern "C" fn tc_uda_free(tcuda: *mut TCUda) {
 /// When this call returns, the `items` pointer will be NULL, signalling an invalid TCUdaList.
 ///
 /// ```c
-/// extern "C" void tc_uda_list_free(struct TCUdaList *tcudas);
+/// EXTERN_C void tc_uda_list_free(struct TCUdaList *tcudas);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_uda_list_free(tcudas: *mut TCUdaList) {

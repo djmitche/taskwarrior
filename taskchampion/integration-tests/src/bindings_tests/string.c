@@ -7,26 +7,26 @@
 static void test_string_creation(void) {
     TCString s = tc_string_borrow("abcdef");
     tc_string_free(&s);
-    TEST_ASSERT_NULL(s.ptr);
+    TEST_ASSERT(tc_string_is_null(&s));
 }
 
 // creating cloned strings does not crash
 static void test_string_cloning(void) {
     char *abcdef = strdup("abcdef");
     TCString s = tc_string_clone(abcdef);
-    TEST_ASSERT_NOT_NULL(s.ptr);
+    TEST_ASSERT_FALSE(tc_string_is_null(&s));
     free(abcdef);
 
     TEST_ASSERT_EQUAL_STRING("abcdef", tc_string_content(&s));
     tc_string_free(&s);
-    TEST_ASSERT_NULL(s.ptr);
+    TEST_ASSERT(tc_string_is_null(&s));
 }
 
 // creating cloned strings with invalid utf-8 does not crash
 // ..but content is NULL and content_and_len returns the value
 static void test_string_cloning_invalid_utf8(void) {
     TCString s = tc_string_clone("\xf0\x28\x8c\x28");
-    TEST_ASSERT_NOT_NULL(s.ptr);
+    TEST_ASSERT_FALSE(tc_string_is_null(&s));
 
     // NOTE: this is not one of the cases where invalid UTF-8 results in NULL,
     // but that may change.
@@ -38,13 +38,13 @@ static void test_string_cloning_invalid_utf8(void) {
     TEST_ASSERT_EQUAL_MEMORY("\xf0\x28\x8c\x28", buf, len);
 
     tc_string_free(&s);
-    TEST_ASSERT_NULL(s.ptr);
+    TEST_ASSERT(tc_string_is_null(&s));
 }
 
 // borrowed strings echo back their content
 static void test_string_borrowed_strings_echo(void) {
     TCString s = tc_string_borrow("abcdef");
-    TEST_ASSERT_NOT_NULL(s.ptr);
+    TEST_ASSERT_FALSE(tc_string_is_null(&s));
 
     TEST_ASSERT_EQUAL_STRING("abcdef", tc_string_content(&s));
 
@@ -55,14 +55,14 @@ static void test_string_borrowed_strings_echo(void) {
     TEST_ASSERT_EQUAL_MEMORY("abcdef", buf, len);
 
     tc_string_free(&s);
-    TEST_ASSERT_NULL(s.ptr);
+    TEST_ASSERT(tc_string_is_null(&s));
 }
 
 // cloned strings echo back their content
 static void test_string_cloned_strings_echo(void) {
     char *orig = strdup("abcdef");
     TCString s = tc_string_clone(orig);
-    TEST_ASSERT_NOT_NULL(s.ptr);
+    TEST_ASSERT_FALSE(tc_string_is_null(&s));
     free(orig);
 
     TEST_ASSERT_EQUAL_STRING("abcdef", tc_string_content(&s));
@@ -74,14 +74,14 @@ static void test_string_cloned_strings_echo(void) {
     TEST_ASSERT_EQUAL_MEMORY("abcdef", buf, len);
 
     tc_string_free(&s);
-    TEST_ASSERT_NULL(s.ptr);
+    TEST_ASSERT(tc_string_is_null(&s));
 }
 
 // tc_clone_with_len can have NULs, and tc_string_content returns NULL for
 // strings containing embedded NULs
 static void test_string_content_null_for_embedded_nuls(void) {
     TCString s = tc_string_clone_with_len("ab\0de", 5);
-    TEST_ASSERT_NOT_NULL(s.ptr);
+    TEST_ASSERT_FALSE(tc_string_is_null(&s));
 
     TEST_ASSERT_NULL(tc_string_content(&s));
 
@@ -91,24 +91,27 @@ static void test_string_content_null_for_embedded_nuls(void) {
     TEST_ASSERT_EQUAL(5, len);
     TEST_ASSERT_EQUAL_MEMORY("ab\0de", buf, len);
     tc_string_free(&s);
-    TEST_ASSERT_NULL(s.ptr);
+    TEST_ASSERT(tc_string_is_null(&s));
 }
 
-// tc_string_clone_with_len will accept invalid utf-8, but then tc_string_content
-// returns NULL.
+// tc_string_clone_with_len will accept invalid utf-8, but passing it to
+// a function that expects a valid (utf-8) string fails.
 static void test_string_clone_with_len_invalid_utf8(void) {
     TCString s = tc_string_clone_with_len("\xf0\x28\x8c\x28", 4);
-    TEST_ASSERT_NOT_NULL(s.ptr);
+    TEST_ASSERT_FALSE(tc_string_is_null(&s));
 
-    TEST_ASSERT_NULL(tc_string_content(&s));
+    TEST_ASSERT_EQUAL_STRING("\xf0\x28\x8c\x28", tc_string_content(&s));
 
     size_t len;
     const char *buf = tc_string_content_with_len(&s, &len);
     TEST_ASSERT_NOT_NULL(buf);
     TEST_ASSERT_EQUAL(4, len);
     TEST_ASSERT_EQUAL_MEMORY("\xf0\x28\x8c\x28", buf, len);
-    tc_string_free(&s);
-    TEST_ASSERT_NULL(s.ptr);
+
+    TCUuid client_key = tc_uuid_new_v4();
+    TEST_ASSERT_NULL(
+        tc_server_new_remote(s, client_key, tc_string_borrow("encr"), NULL));
+    // (s is freed by tc_server_new_remote)
 }
 
 int string_tests(void) {

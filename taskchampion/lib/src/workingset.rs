@@ -58,7 +58,7 @@ where
 /// Get the working set's length, or the number of UUIDs it contains.
 ///
 /// ```c
-/// extern "C" size_t tc_working_set_len(struct TCWorkingSet *ws);
+/// EXTERN_C size_t tc_working_set_len(struct TCWorkingSet *ws);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_working_set_len(ws: *mut TCWorkingSet) -> usize {
@@ -70,7 +70,7 @@ pub unsafe extern "C" fn tc_working_set_len(ws: *mut TCWorkingSet) -> usize {
 /// Get the working set's largest index.
 ///
 /// ```c
-/// extern "C" size_t tc_working_set_largest_index(struct TCWorkingSet *ws);
+/// EXTERN_C size_t tc_working_set_largest_index(struct TCWorkingSet *ws);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_working_set_largest_index(ws: *mut TCWorkingSet) -> usize {
@@ -83,7 +83,7 @@ pub unsafe extern "C" fn tc_working_set_largest_index(ws: *mut TCWorkingSet) -> 
 /// set.  If not, returns false and does not change uuid_out.
 ///
 /// ```c
-/// extern "C" bool tc_working_set_by_index(struct TCWorkingSet *ws, size_t index, struct TCUuid *uuid_out);
+/// EXTERN_C bool tc_working_set_by_index(struct TCWorkingSet *ws, size_t index, struct TCUuid *uuid_out);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_working_set_by_index(
@@ -111,7 +111,7 @@ pub unsafe extern "C" fn tc_working_set_by_index(
 /// the working set.
 ///
 /// ```c
-/// extern "C" size_t tc_working_set_by_uuid(struct TCWorkingSet *ws, struct TCUuid uuid);
+/// EXTERN_C size_t tc_working_set_by_uuid(struct TCWorkingSet *ws, struct TCUuid uuid);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_working_set_by_uuid(ws: *mut TCWorkingSet, uuid: TCUuid) -> usize {
@@ -129,7 +129,7 @@ pub unsafe extern "C" fn tc_working_set_by_uuid(ws: *mut TCWorkingSet, uuid: TCU
 /// function returns, and must not be freed more than once.
 ///
 /// ```c
-/// extern "C" void tc_working_set_free(struct TCWorkingSet *ws);
+/// EXTERN_C void tc_working_set_free(struct TCWorkingSet *ws);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_working_set_free(ws: *mut TCWorkingSet) {

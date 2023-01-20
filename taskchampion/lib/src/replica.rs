@@ -1,6 +1,8 @@
 use crate::traits::*;
 use crate::types::*;
-use crate::util::err_to_ruststring;
+use crate::util::err_to_fzstring;
+use ffizz_passby::OpaqueStruct;
+use ffizz_string::FzString;
 use std::ptr::NonNull;
 use taskchampion::{Replica, StorageConfig};
 
@@ -42,7 +44,7 @@ pub struct TCReplica {
     mut_borrowed: bool,
 
     /// The error from the most recent operation, if any
-    error: Option<RustString<'static>>,
+    error: Option<FzString<'static>>,
 }
 
 impl PassByPointer for TCReplica {}
@@ -96,7 +98,7 @@ where
     match f(&mut rep.inner) {
         Ok(v) => v,
         Err(e) => {
-            rep.error = Some(err_to_ruststring(e));
+            rep.error = Some(err_to_fzstring(e));
             err_value
         }
     }
@@ -107,22 +109,25 @@ fn wrap_constructor<T, F>(f: F, error_out: *mut TCString, err_value: T) -> T
 where
     F: FnOnce() -> anyhow::Result<T>,
 {
-    if !error_out.is_null() {
-        // SAFETY:
-        //  - error_out is not NULL (just checked)
-        //  - properly aligned and valid (promised by caller)
-        unsafe { *error_out = TCString::default() };
-    }
-
     match f() {
-        Ok(v) => v,
+        Ok(v) => {
+            if !error_out.is_null() {
+                // SAFETY:
+                //  - error_out is not NULL (just checked)
+                //  - properly aligned and valid (promised by caller)
+                unsafe {
+                    FzString::initialize(error_out, FzString::Null);
+                }
+            }
+            v
+        }
         Err(e) => {
             if !error_out.is_null() {
                 // SAFETY:
                 //  - error_out is not NULL (just checked)
                 //  - properly aligned and valid (promised by caller)
                 unsafe {
-                    TCString::val_to_arg_out(err_to_ruststring(e), error_out);
+                    FzString::initialize(error_out, err_to_fzstring(e));
                 }
             }
             err_value
@@ -136,7 +141,7 @@ where
 /// lost when it is freed with tc_replica_free.
 ///
 /// ```c
-/// extern "C" struct TCReplica *tc_replica_new_in_memory(void);
+/// EXTERN_C struct TCReplica *tc_replica_new_in_memory(void);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_new_in_memory() -> *mut TCReplica {
@@ -155,7 +160,7 @@ pub unsafe extern "C" fn tc_replica_new_in_memory() -> *mut TCReplica {
 /// must free this string.
 ///
 /// ```c
-/// extern "C" struct TCReplica *tc_replica_new_on_disk(struct TCString path,
+/// EXTERN_C struct TCReplica *tc_replica_new_on_disk(struct TCString path,
 ///                                          bool create_if_missing,
 ///                                          struct TCString *error_out);
 /// ```
@@ -170,9 +175,9 @@ pub unsafe extern "C" fn tc_replica_new_on_disk(
             // SAFETY:
             //  - path is valid (promised by caller)
             //  - caller will not use path after this call (convention)
-            let mut path = unsafe { TCString::val_from_arg(path) };
+            let path = unsafe { FzString::take(path) };
             let storage = StorageConfig::OnDisk {
-                taskdb_dir: path.to_path_buf_mut()?,
+                taskdb_dir: path.into_path_buf()?.expect("taskdb_dir must not be NULL"),
                 create_if_missing,
             }
             .into_storage()?;
@@ -193,7 +198,7 @@ pub unsafe extern "C" fn tc_replica_new_on_disk(
 /// Returns a TCTaskList with a NULL items field on error.
 ///
 /// ```c
-/// extern "C" struct TCTaskList tc_replica_all_tasks(struct TCReplica *rep);
+/// EXTERN_C struct TCTaskList tc_replica_all_tasks(struct TCReplica *rep);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_all_tasks(rep: *mut TCReplica) -> TCTaskList {
@@ -234,7 +239,7 @@ pub unsafe extern "C" fn tc_replica_all_tasks(rep: *mut TCReplica) -> TCTaskList
 /// The caller must free the UUID list with `tc_uuid_list_free`.
 ///
 /// ```c
-/// extern "C" struct TCUuidList tc_replica_all_task_uuids(struct TCReplica *rep);
+/// EXTERN_C struct TCUuidList tc_replica_all_task_uuids(struct TCReplica *rep);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_all_task_uuids(rep: *mut TCReplica) -> TCUuidList {
@@ -264,7 +269,7 @@ pub unsafe extern "C" fn tc_replica_all_task_uuids(rep: *mut TCReplica) -> TCUui
 /// Returns NULL on error.
 ///
 /// ```c
-/// extern "C" struct TCWorkingSet *tc_replica_working_set(struct TCReplica *rep);
+/// EXTERN_C struct TCWorkingSet *tc_replica_working_set(struct TCReplica *rep);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_working_set(rep: *mut TCReplica) -> *mut TCWorkingSet {
@@ -288,7 +293,7 @@ pub unsafe extern "C" fn tc_replica_working_set(rep: *mut TCReplica) -> *mut TCW
 /// to distinguish the two conditions.
 ///
 /// ```c
-/// extern "C" struct TCTask *tc_replica_get_task(struct TCReplica *rep, struct TCUuid tcuuid);
+/// EXTERN_C struct TCTask *tc_replica_get_task(struct TCReplica *rep, struct TCUuid tcuuid);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_get_task(rep: *mut TCReplica, tcuuid: TCUuid) -> *mut TCTask {
@@ -318,7 +323,7 @@ pub unsafe extern "C" fn tc_replica_get_task(rep: *mut TCReplica, tcuuid: TCUuid
 /// Returns the task, or NULL on error.
 ///
 /// ```c
-/// extern "C" struct TCTask *tc_replica_new_task(struct TCReplica *rep,
+/// EXTERN_C struct TCTask *tc_replica_new_task(struct TCReplica *rep,
 ///                                    enum TCStatus status,
 ///                                    struct TCString description);
 /// ```
@@ -331,11 +336,17 @@ pub unsafe extern "C" fn tc_replica_new_task(
     // SAFETY:
     //  - description is valid (promised by caller)
     //  - caller will not use description after this call (convention)
-    let mut description = unsafe { TCString::val_from_arg(description) };
+    let mut description = unsafe { FzString::take(description) };
     wrap(
         rep,
         |rep| {
-            let task = rep.new_task(status.into(), description.as_str()?.to_string())?;
+            let task = rep.new_task(
+                status.into(),
+                description
+                    .as_str()?
+                    .expect("description must not be NULL")
+                    .to_string(),
+            )?;
             // SAFETY:
             // - caller promises to free this task
             Ok(unsafe { TCTask::from(task).return_ptr() })
@@ -351,7 +362,7 @@ pub unsafe extern "C" fn tc_replica_new_task(
 /// Returns the task, or NULL on error.
 ///
 /// ```c
-/// extern "C" struct TCTask *tc_replica_import_task_with_uuid(struct TCReplica *rep, struct TCUuid tcuuid);
+/// EXTERN_C struct TCTask *tc_replica_import_task_with_uuid(struct TCReplica *rep, struct TCUuid tcuuid);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_import_task_with_uuid(
@@ -381,7 +392,7 @@ pub unsafe extern "C" fn tc_replica_import_task_with_uuid(
 /// The `server` argument remains owned by the caller, and must be freed explicitly.
 ///
 /// ```c
-/// extern "C" TCResult tc_replica_sync(struct TCReplica *rep, struct TCServer *server, bool avoid_snapshots);
+/// EXTERN_C TCResult tc_replica_sync(struct TCReplica *rep, struct TCServer *server, bool avoid_snapshots);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_sync(
@@ -414,7 +425,7 @@ pub unsafe extern "C" fn tc_replica_sync(
 /// there are no operations that can be done.
 ///
 /// ```c
-/// extern "C" TCResult tc_replica_undo(struct TCReplica *rep, int32_t *undone_out);
+/// EXTERN_C TCResult tc_replica_undo(struct TCReplica *rep, int32_t *undone_out);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_undo(rep: *mut TCReplica, undone_out: *mut i32) -> TCResult {
@@ -440,7 +451,7 @@ pub unsafe extern "C" fn tc_replica_undo(rep: *mut TCReplica, undone_out: *mut i
 /// error.
 ///
 /// ```c
-/// extern "C" int64_t tc_replica_num_local_operations(struct TCReplica *rep);
+/// EXTERN_C int64_t tc_replica_num_local_operations(struct TCReplica *rep);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_num_local_operations(rep: *mut TCReplica) -> i64 {
@@ -459,7 +470,7 @@ pub unsafe extern "C" fn tc_replica_num_local_operations(rep: *mut TCReplica) ->
 /// Get the number of undo points (number of undo calls possible), or -1 on error.
 ///
 /// ```c
-/// extern "C" int64_t tc_replica_num_undo_points(struct TCReplica *rep);
+/// EXTERN_C int64_t tc_replica_num_undo_points(struct TCReplica *rep);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_num_undo_points(rep: *mut TCReplica) -> i64 {
@@ -481,7 +492,7 @@ pub unsafe extern "C" fn tc_replica_num_undo_points(rep: *mut TCReplica) -> i64 
 /// and used to apply more than one user-visible change.
 ///
 /// ```c
-/// extern "C" TCResult tc_replica_add_undo_point(struct TCReplica *rep, bool force);
+/// EXTERN_C TCResult tc_replica_add_undo_point(struct TCReplica *rep, bool force);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_add_undo_point(rep: *mut TCReplica, force: bool) -> TCResult {
@@ -502,7 +513,7 @@ pub unsafe extern "C" fn tc_replica_add_undo_point(rep: *mut TCReplica, force: b
 /// completion all pending tasks are in the working set and all non- pending tasks are not.
 ///
 /// ```c
-/// extern "C" TCResult tc_replica_rebuild_working_set(struct TCReplica *rep, bool renumber);
+/// EXTERN_C TCResult tc_replica_rebuild_working_set(struct TCReplica *rep, bool renumber);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_rebuild_working_set(
@@ -526,7 +537,7 @@ pub unsafe extern "C" fn tc_replica_rebuild_working_set(
 /// free the returned string.
 ///
 /// ```c
-/// extern "C" struct TCString tc_replica_error(struct TCReplica *rep);
+/// EXTERN_C struct TCString tc_replica_error(struct TCReplica *rep);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_error(rep: *mut TCReplica) -> TCString {
@@ -536,12 +547,13 @@ pub unsafe extern "C" fn tc_replica_error(rep: *mut TCReplica) -> TCString {
     //  - rep is valid for the duration of this function
     //  - rep is not modified by anything else (not threadsafe)
     let rep: &mut TCReplica = unsafe { TCReplica::from_ptr_arg_ref_mut(rep) };
-    if let Some(rstring) = rep.error.take() {
+    if let Some(fzstring) = rep.error.take() {
         // SAFETY:
         // - caller promises to free this string
-        unsafe { TCString::return_val(rstring) }
+        unsafe { fzstring.return_val() }
     } else {
-        TCString::default()
+        // SAFETY: (same)
+        unsafe { FzString::Null.return_val() }
     }
 }
 
@@ -551,7 +563,7 @@ pub unsafe extern "C" fn tc_replica_error(rep: *mut TCReplica) -> TCString {
 /// more than once.
 ///
 /// ```c
-/// extern "C" void tc_replica_free(struct TCReplica *rep);
+/// EXTERN_C void tc_replica_free(struct TCReplica *rep);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_replica_free(rep: *mut TCReplica) {

@@ -4,11 +4,13 @@
 #include "taskchampion.h"
 #include "unity.h"
 
+
 // creating an in-memory replica does not crash
 static void test_replica_creation(void) {
     TCReplica *rep = tc_replica_new_in_memory();
     TEST_ASSERT_NOT_NULL(rep);
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    TCString err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
     tc_replica_free(rep);
 }
 
@@ -16,28 +18,33 @@ static void test_replica_creation(void) {
 static void test_replica_creation_disk(void) {
     TCReplica *rep = tc_replica_new_on_disk(tc_string_borrow("test-db"), true, NULL);
     TEST_ASSERT_NOT_NULL(rep);
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    TCString err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
     tc_replica_free(rep);
 }
 
 // undo on an empty in-memory TCReplica does nothing
 static void test_replica_undo_empty(void) {
     TCReplica *rep = tc_replica_new_in_memory();
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    TCString err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
     int undone;
     int rv = tc_replica_undo(rep, &undone);
     TEST_ASSERT_EQUAL(TC_RESULT_OK, rv);
     TEST_ASSERT_EQUAL(0, undone);
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
     tc_replica_free(rep);
 }
 
 // adding an undo point succeeds
 static void test_replica_add_undo_point(void) {
     TCReplica *rep = tc_replica_new_in_memory();
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    TCString err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
     TEST_ASSERT_EQUAL(TC_RESULT_OK, tc_replica_add_undo_point(rep, true));
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
     tc_replica_free(rep);
 }
 
@@ -48,10 +55,12 @@ static void test_replica_working_set(void) {
     TCUuid uuid, uuid1, uuid2, uuid3;
 
     TCReplica *rep = tc_replica_new_in_memory();
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    TCString err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     TEST_ASSERT_EQUAL(TC_RESULT_OK, tc_replica_rebuild_working_set(rep, true));
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     ws = tc_replica_working_set(rep);
     TEST_ASSERT_EQUAL(0, tc_working_set_len(ws));
@@ -62,7 +71,8 @@ static void test_replica_working_set(void) {
     uuid1 = tc_task_get_uuid(task1);
 
     TEST_ASSERT_EQUAL(TC_RESULT_OK, tc_replica_rebuild_working_set(rep, true));
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     task2 = tc_replica_new_task(rep, TC_STATUS_PENDING, tc_string_borrow("task2"));
     TEST_ASSERT_NOT_NULL(task2);
@@ -73,7 +83,8 @@ static void test_replica_working_set(void) {
     uuid3 = tc_task_get_uuid(task3);
 
     TEST_ASSERT_EQUAL(TC_RESULT_OK, tc_replica_rebuild_working_set(rep, false));
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     // finish task2 to leave a "hole"
     tc_task_to_mut(task2, rep);
@@ -81,7 +92,8 @@ static void test_replica_working_set(void) {
     tc_task_to_immut(task2);
 
     TEST_ASSERT_EQUAL(TC_RESULT_OK, tc_replica_rebuild_working_set(rep, false));
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     tc_task_free(task1);
     tc_task_free(task2);
@@ -117,17 +129,20 @@ static void test_replica_working_set(void) {
 // When tc_replica_undo is passed NULL for undone_out, it still succeeds
 static void test_replica_undo_empty_null_undone_out(void) {
     TCReplica *rep = tc_replica_new_in_memory();
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    TCString err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
     int rv = tc_replica_undo(rep, NULL);
     TEST_ASSERT_EQUAL(TC_RESULT_OK, rv);
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
     tc_replica_free(rep);
 }
 
 // creating a task succeeds and the resulting task looks good
 static void test_replica_task_creation(void) {
     TCReplica *rep = tc_replica_new_in_memory();
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    TCString err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     TCTask *task = tc_replica_new_task(
             rep,
@@ -139,7 +154,7 @@ static void test_replica_task_creation(void) {
     TEST_ASSERT_EQUAL(TC_STATUS_PENDING, tc_task_get_status(task));
 
     TCString desc = tc_task_get_description(task);
-    TEST_ASSERT_NOT_NULL(desc.ptr);
+    TEST_ASSERT_FALSE(tc_string_is_null(&desc));
     TEST_ASSERT_EQUAL_STRING("my task", tc_string_content(&desc));
     tc_string_free(&desc);
 
@@ -159,18 +174,19 @@ static void test_replica_task_creation(void) {
 // When tc_replica_undo is passed NULL for undone_out, it still succeeds
 static void test_replica_sync_local(void) {
     TCReplica *rep = tc_replica_new_in_memory();
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    TCString err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     mkdir("test-sync-server", 0755); // ignore error, if dir already exists
 
-    TCString err;
     TCServer *server = tc_server_new_local(tc_string_borrow("test-sync-server"), &err);
     TEST_ASSERT_NOT_NULL(server);
-    TEST_ASSERT_NULL(err.ptr);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     int rv = tc_replica_sync(rep, server, false);
     TEST_ASSERT_EQUAL(TC_RESULT_OK, rv);
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     tc_server_free(server);
     tc_replica_free(rep);
@@ -178,12 +194,12 @@ static void test_replica_sync_local(void) {
     // test error handling
     server = tc_server_new_local(tc_string_borrow("/no/such/directory"), &err);
     TEST_ASSERT_NULL(server);
-    TEST_ASSERT_NOT_NULL(err.ptr);
+    TEST_ASSERT_FALSE(tc_string_is_null(&err));
     tc_string_free(&err);
 }
 
-// When tc_replica_undo is passed NULL for undone_out, it still succeeds
-static void test_replica_remote_server(void) {
+// Creating and freeing a remote server succeeds
+static void test_remote_server(void) {
     TCString err;
     TCServer *server = tc_server_new_remote(
         tc_string_borrow("tc.freecinc.com"),
@@ -191,7 +207,7 @@ static void test_replica_remote_server(void) {
         tc_string_borrow("\xf0\x28\x8c\x28"), // NOTE: not utf-8
         &err);
     TEST_ASSERT_NOT_NULL(server);
-    TEST_ASSERT_NULL(err.ptr);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     // can't actually do anything with this server!
 
@@ -201,7 +217,8 @@ static void test_replica_remote_server(void) {
 // a replica with tasks in it returns an appropriate list of tasks and list of uuids
 static void test_replica_all_tasks(void) {
     TCReplica *rep = tc_replica_new_in_memory();
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    TCString err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     TCTask *task1 = tc_replica_new_task(
             rep,
@@ -269,7 +286,8 @@ static void test_replica_all_tasks(void) {
 // importing a task succeeds and the resulting task looks good
 static void test_replica_task_import(void) {
     TCReplica *rep = tc_replica_new_in_memory();
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    TCString err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     TCUuid uuid;
     TEST_ASSERT_EQUAL(TC_RESULT_OK, tc_uuid_from_str(tc_string_borrow("23cb25e0-5d1a-4932-8131-594ac6d3a843"), &uuid));
@@ -280,7 +298,7 @@ static void test_replica_task_import(void) {
     TEST_ASSERT_EQUAL(TC_STATUS_PENDING, tc_task_get_status(task));
 
     TCString desc = tc_task_get_description(task);
-    TEST_ASSERT_NOT_NULL(desc.ptr);
+    TEST_ASSERT_FALSE(tc_string_is_null(&desc));
     TEST_ASSERT_EQUAL_STRING("", tc_string_content(&desc)); // default value
     tc_string_free(&desc);
 
@@ -300,13 +318,15 @@ static void test_replica_task_import(void) {
 // importing a task succeeds and the resulting task looks good
 static void test_replica_get_task_not_found(void) {
     TCReplica *rep = tc_replica_new_in_memory();
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    TCString err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     TCUuid uuid;
     TEST_ASSERT_EQUAL(TC_RESULT_OK, tc_uuid_from_str(tc_string_borrow("23cb25e0-5d1a-4932-8131-594ac6d3a843"), &uuid));
     TCTask *task = tc_replica_get_task(rep, uuid);
     TEST_ASSERT_NULL(task);
-    TEST_ASSERT_NULL(tc_replica_error(rep).ptr);
+    err = tc_replica_error(rep);
+    TEST_ASSERT(tc_string_is_null(&err));
 
     tc_replica_free(rep);
 }
@@ -322,7 +342,7 @@ int replica_tests(void) {
     RUN_TEST(test_replica_undo_empty_null_undone_out);
     RUN_TEST(test_replica_task_creation);
     RUN_TEST(test_replica_sync_local);
-    RUN_TEST(test_replica_remote_server);
+    RUN_TEST(test_remote_server);
     RUN_TEST(test_replica_all_tasks);
     RUN_TEST(test_replica_task_import);
     RUN_TEST(test_replica_get_task_not_found);

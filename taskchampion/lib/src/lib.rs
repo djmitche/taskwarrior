@@ -107,6 +107,17 @@ ffizz_header::snippet! {
 /// #include <stdbool.h>
 /// #include <stdint.h>
 /// #include <time.h>
+///
+/// #ifdef __cplusplus
+/// #define EXTERN_C extern "C"
+/// #else
+/// #define EXTERN_C
+/// #endif // __cplusplus
+///
+/// // forward declarations
+/// typedef struct TCReplica TCReplica;
+/// typedef struct TCServer TCServer;
+/// typedef struct TCTask TCTask;
 /// ```
 }
 
@@ -152,7 +163,7 @@ pub(crate) mod types {
     pub(crate) use crate::result::TCResult;
     pub(crate) use crate::server::TCServer;
     pub(crate) use crate::status::TCStatus;
-    pub(crate) use crate::string::{RustString, TCString, TCStringList};
+    pub(crate) use crate::string::{TCString, TCStringList};
     pub(crate) use crate::task::{TCTask, TCTaskList};
     pub(crate) use crate::uda::{TCUda, TCUdaList, Uda};
     pub(crate) use crate::uuid::{TCUuid, TCUuidList};

@@ -1,12 +1,16 @@
 use crate::traits::*;
 use crate::types::*;
-use crate::util::err_to_ruststring;
-use std::convert::TryFrom;
+use crate::util::err_to_fzstring;
+use ffizz_passby::OpaqueStruct;
+use ffizz_string::FzString;
 use std::ops::Deref;
 use std::ptr::NonNull;
 use std::str::FromStr;
 use taskchampion::chrono::{TimeZone, Utc};
 use taskchampion::{Annotation, Tag, Task, TaskMut, Uuid};
+
+// TODO: be careful where a Null string is a runtime error (or just results in a Null return) vs.
+// invalid
 
 #[ffizz_header::item]
 #[ffizz(order = 800)]
@@ -50,7 +54,7 @@ pub struct TCTask {
     inner: Inner,
 
     /// The error from the most recent operation, if any
-    error: Option<RustString<'static>>,
+    error: Option<FzString<'static>>,
 }
 
 enum Inner {
@@ -162,19 +166,15 @@ where
     match f(task) {
         Ok(rv) => rv,
         Err(e) => {
-            tctask.error = Some(err_to_ruststring(e));
+            tctask.error = Some(err_to_fzstring(e));
             err_value
         }
     }
 }
 
-impl TryFrom<RustString<'static>> for Tag {
-    type Error = anyhow::Error;
-
-    fn try_from(mut rstring: RustString) -> Result<Tag, anyhow::Error> {
-        let tagstr = rstring.as_str()?;
-        Tag::from_str(tagstr)
-    }
+fn try_tag_from_fzstring(mut fzstring: FzString) -> Result<Tag, anyhow::Error> {
+    let tagstr = fzstring.as_str()?.expect("tag must not be NULL");
+    Tag::from_str(tagstr)
 }
 
 #[ffizz_header::item]
@@ -244,7 +244,7 @@ impl CList for TCTaskList {
 /// Get a task's UUID.
 ///
 /// ```c
-/// extern "C" struct TCUuid tc_task_get_uuid(struct TCTask *task);
+/// EXTERN_C struct TCUuid tc_task_get_uuid(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_uuid(task: *mut TCTask) -> TCUuid {
@@ -260,7 +260,7 @@ pub unsafe extern "C" fn tc_task_get_uuid(task: *mut TCTask) -> TCUuid {
 /// Get a task's status.
 ///
 /// ```c
-/// extern "C" enum TCStatus tc_task_get_status(struct TCTask *task);
+/// EXTERN_C enum TCStatus tc_task_get_status(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_status(task: *mut TCTask) -> TCStatus {
@@ -274,7 +274,7 @@ pub unsafe extern "C" fn tc_task_get_status(task: *mut TCTask) -> TCStatus {
 /// modified.  It is the caller's responsibility to free the TCKVList.
 ///
 /// ```c
-/// extern "C" struct TCKVList tc_task_get_taskmap(struct TCTask *task);
+/// EXTERN_C struct TCKVList tc_task_get_taskmap(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_taskmap(task: *mut TCTask) -> TCKVList {
@@ -283,8 +283,10 @@ pub unsafe extern "C" fn tc_task_get_taskmap(task: *mut TCTask) -> TCKVList {
             .get_taskmap()
             .iter()
             .map(|(k, v)| {
-                let key = RustString::from(k.as_ref());
-                let value = RustString::from(v.as_ref());
+                let k: &str = k.as_ref();
+                let key = FzString::from(k);
+                let v: &str = v.as_ref();
+                let value = FzString::from(v);
                 TCKV::as_ctype((key, value))
             })
             .collect();
@@ -299,7 +301,7 @@ pub unsafe extern "C" fn tc_task_get_taskmap(task: *mut TCTask) -> TCKVList {
 /// Get a task's description.
 ///
 /// ```c
-/// extern "C" struct TCString tc_task_get_description(struct TCTask *task);
+/// EXTERN_C struct TCString tc_task_get_description(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_description(task: *mut TCTask) -> TCString {
@@ -307,34 +309,36 @@ pub unsafe extern "C" fn tc_task_get_description(task: *mut TCTask) -> TCString 
         let descr = task.get_description();
         // SAFETY:
         //  - caller promises to free this string
-        unsafe { TCString::return_val(descr.into()) }
+        unsafe { FzString::from(descr).return_val() }
     })
 }
 
 #[ffizz_header::item]
 #[ffizz(order = 801)]
-/// Get a task property's value, or NULL if the task has no such property, (including if the
-/// property name is not valid utf-8).
+/// Get a task property's value, or Null if the task has no such property, (including if the
+/// property name is Null not valid utf-8).
 ///
 /// ```c
-/// extern "C" struct TCString tc_task_get_value(struct TCTask *task, struct TCString property);
+/// EXTERN_C struct TCString tc_task_get_value(struct TCTask *task, struct TCString property);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_value(task: *mut TCTask, property: TCString) -> TCString {
     // SAFETY:
     //  - property is valid (promised by caller)
     //  - caller will not use property after this call (convention)
-    let mut property = unsafe { TCString::val_from_arg(property) };
+    let mut property = unsafe { FzString::take(property) };
     wrap(task, |task| {
-        if let Ok(property) = property.as_str() {
+        if let Ok(Some(property)) = property.as_str() {
             let value = task.get_value(property);
             if let Some(value) = value {
                 // SAFETY:
                 //  - caller promises to free this string
-                return unsafe { TCString::return_val(value.into()) };
+                return unsafe { FzString::from(value).return_val() };
             }
         }
-        TCString::default() // null value
+        // SAFETY:
+        //  - caller promises to free this string
+        return unsafe { FzString::Null.return_val() };
     })
 }
 
@@ -343,7 +347,7 @@ pub unsafe extern "C" fn tc_task_get_value(task: *mut TCTask, property: TCString
 /// Get the entry timestamp for a task (when it was created), or 0 if not set.
 ///
 /// ```c
-/// extern "C" time_t tc_task_get_entry(struct TCTask *task);
+/// EXTERN_C time_t tc_task_get_entry(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_entry(task: *mut TCTask) -> libc::time_t {
@@ -355,7 +359,7 @@ pub unsafe extern "C" fn tc_task_get_entry(task: *mut TCTask) -> libc::time_t {
 /// Get the wait timestamp for a task, or 0 if not set.
 ///
 /// ```c
-/// extern "C" time_t tc_task_get_wait(struct TCTask *task);
+/// EXTERN_C time_t tc_task_get_wait(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_wait(task: *mut TCTask) -> libc::time_t {
@@ -367,7 +371,7 @@ pub unsafe extern "C" fn tc_task_get_wait(task: *mut TCTask) -> libc::time_t {
 /// Get the modified timestamp for a task, or 0 if not set.
 ///
 /// ```c
-/// extern "C" time_t tc_task_get_modified(struct TCTask *task);
+/// EXTERN_C time_t tc_task_get_modified(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_modified(task: *mut TCTask) -> libc::time_t {
@@ -379,7 +383,7 @@ pub unsafe extern "C" fn tc_task_get_modified(task: *mut TCTask) -> libc::time_t
 /// Check if a task is waiting.
 ///
 /// ```c
-/// extern "C" bool tc_task_is_waiting(struct TCTask *task);
+/// EXTERN_C bool tc_task_is_waiting(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_is_waiting(task: *mut TCTask) -> bool {
@@ -391,7 +395,7 @@ pub unsafe extern "C" fn tc_task_is_waiting(task: *mut TCTask) -> bool {
 /// Check if a task is active (started and not stopped).
 ///
 /// ```c
-/// extern "C" bool tc_task_is_active(struct TCTask *task);
+/// EXTERN_C bool tc_task_is_active(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_is_active(task: *mut TCTask) -> bool {
@@ -403,7 +407,7 @@ pub unsafe extern "C" fn tc_task_is_active(task: *mut TCTask) -> bool {
 /// Check if a task is blocked (depends on at least one other task).
 ///
 /// ```c
-/// extern "C" bool tc_task_is_blocked(struct TCTask *task);
+/// EXTERN_C bool tc_task_is_blocked(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_is_blocked(task: *mut TCTask) -> bool {
@@ -415,7 +419,7 @@ pub unsafe extern "C" fn tc_task_is_blocked(task: *mut TCTask) -> bool {
 /// Check if a task is blocking (at least one other task depends on it).
 ///
 /// ```c
-/// extern "C" bool tc_task_is_blocking(struct TCTask *task);
+/// EXTERN_C bool tc_task_is_blocking(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_is_blocking(task: *mut TCTask) -> bool {
@@ -428,16 +432,16 @@ pub unsafe extern "C" fn tc_task_is_blocking(task: *mut TCTask) -> bool {
 /// that (invalid) tag is not present. No error will be reported via `tc_task_error`.
 ///
 /// ```c
-/// extern "C" bool tc_task_has_tag(struct TCTask *task, struct TCString tag);
+/// EXTERN_C bool tc_task_has_tag(struct TCTask *task, struct TCString tag);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_has_tag(task: *mut TCTask, tag: TCString) -> bool {
     // SAFETY:
     //  - tag is valid (promised by caller)
     //  - caller will not use tag after this call (convention)
-    let tcstring = unsafe { TCString::val_from_arg(tag) };
+    let tcstring = unsafe { FzString::take(tag) };
     wrap(task, |task| {
-        if let Ok(tag) = Tag::try_from(tcstring) {
+        if let Ok(tag) = try_tag_from_fzstring(tcstring) {
             task.has_tag(&tag)
         } else {
             false
@@ -453,7 +457,7 @@ pub unsafe extern "C" fn tc_task_has_tag(task: *mut TCTask, tag: TCString) -> bo
 /// reference the task and the two may be freed in any order.
 ///
 /// ```c
-/// extern "C" struct TCStringList tc_task_get_tags(struct TCTask *task);
+/// EXTERN_C struct TCStringList tc_task_get_tags(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_tags(task: *mut TCTask) -> TCStringList {
@@ -463,7 +467,7 @@ pub unsafe extern "C" fn tc_task_get_tags(task: *mut TCTask) -> TCStringList {
             .map(|t| {
                 // SAFETY:
                 //  - this TCString will be freed via tc_string_list_free.
-                unsafe { TCString::return_val(t.as_ref().into()) }
+                unsafe { FzString::from(t.as_ref()).return_val() }
             })
             .collect();
         // SAFETY:
@@ -480,7 +484,7 @@ pub unsafe extern "C" fn tc_task_get_tags(task: *mut TCTask) -> TCStringList {
 /// reference the task and the two may be freed in any order.
 ///
 /// ```c
-/// extern "C" struct TCAnnotationList tc_task_get_annotations(struct TCTask *task);
+/// EXTERN_C struct TCAnnotationList tc_task_get_annotations(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_annotations(task: *mut TCTask) -> TCAnnotationList {
@@ -488,7 +492,7 @@ pub unsafe extern "C" fn tc_task_get_annotations(task: *mut TCTask) -> TCAnnotat
         let vec: Vec<TCAnnotation> = task
             .get_annotations()
             .map(|a| {
-                let description = RustString::from(a.description);
+                let description = FzString::from(a.description);
                 TCAnnotation::as_ctype((a.entry, description))
             })
             .collect();
@@ -505,7 +509,7 @@ pub unsafe extern "C" fn tc_task_get_annotations(task: *mut TCTask) -> TCAnnotat
 /// Returns a TCString with NULL ptr field if the UDA does not exist.
 ///
 /// ```c
-/// extern "C" struct TCString tc_task_get_uda(struct TCTask *task, struct TCString ns, struct TCString key);
+/// EXTERN_C struct TCString tc_task_get_uda(struct TCTask *task, struct TCString ns, struct TCString key);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_uda(
@@ -517,17 +521,19 @@ pub unsafe extern "C" fn tc_task_get_uda(
         // SAFETY:
         //  - ns is valid (promised by caller)
         //  - caller will not use ns after this call (convention)
-        if let Ok(ns) = unsafe { TCString::val_from_arg(ns) }.as_str() {
+        if let Ok(Some(ns)) = unsafe { FzString::take(ns) }.as_str() {
             // SAFETY: same
-            if let Ok(key) = unsafe { TCString::val_from_arg(key) }.as_str() {
+            if let Ok(Some(key)) = unsafe { FzString::take(key) }.as_str() {
                 if let Some(value) = task.get_uda(ns, key) {
                     // SAFETY:
                     // - caller will free this string (caller promises)
-                    return unsafe { TCString::return_val(value.into()) };
+                    return unsafe { FzString::from(value).return_val() };
                 }
             }
         }
-        TCString::default()
+        // SAFETY:
+        // - caller will free this string (caller promises)
+        return unsafe { FzString::Null.return_val() };
     })
 }
 
@@ -538,7 +544,7 @@ pub unsafe extern "C" fn tc_task_get_uda(
 /// Returns NULL if the UDA does not exist.
 ///
 /// ```c
-/// extern "C" struct TCString tc_task_get_legacy_uda(struct TCTask *task, struct TCString key);
+/// EXTERN_C struct TCString tc_task_get_legacy_uda(struct TCTask *task, struct TCString key);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_legacy_uda(task: *mut TCTask, key: TCString) -> TCString {
@@ -546,14 +552,16 @@ pub unsafe extern "C" fn tc_task_get_legacy_uda(task: *mut TCTask, key: TCString
         // SAFETY:
         //  - key is valid (promised by caller)
         //  - caller will not use key after this call (convention)
-        if let Ok(key) = unsafe { TCString::val_from_arg(key) }.as_str() {
+        if let Ok(Some(key)) = unsafe { FzString::take(key) }.as_str() {
             if let Some(value) = task.get_legacy_uda(key) {
                 // SAFETY:
                 // - caller will free this string (caller promises)
-                return unsafe { TCString::return_val(value.into()) };
+                return unsafe { FzString::from(value).return_val() };
             }
         }
-        TCString::default()
+        // SAFETY:
+        // - caller will free this string (caller promises)
+        return unsafe { FzString::Null.return_val() };
     })
 }
 
@@ -564,7 +572,7 @@ pub unsafe extern "C" fn tc_task_get_legacy_uda(task: *mut TCTask, key: TCString
 /// Legacy UDAs are represented with an empty string in the ns field.
 ///
 /// ```c
-/// extern "C" struct TCUdaList tc_task_get_udas(struct TCTask *task);
+/// EXTERN_C struct TCUdaList tc_task_get_udas(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_udas(task: *mut TCTask) -> TCUdaList {
@@ -576,7 +584,7 @@ pub unsafe extern "C" fn tc_task_get_udas(task: *mut TCTask) -> TCUdaList {
                 //  - will be freed by tc_uda_list_free
                 unsafe {
                     TCUda::return_val(Uda {
-                        ns: Some(ns.into()),
+                        ns: ns.into(),
                         key: key.into(),
                         value: value.into(),
                     })
@@ -597,7 +605,7 @@ pub unsafe extern "C" fn tc_task_get_udas(task: *mut TCTask) -> TCUdaList {
 /// included in the key field.  The caller must free the returned list.
 ///
 /// ```c
-/// extern "C" struct TCUdaList tc_task_get_legacy_udas(struct TCTask *task);
+/// EXTERN_C struct TCUdaList tc_task_get_legacy_udas(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_legacy_udas(task: *mut TCTask) -> TCUdaList {
@@ -609,7 +617,7 @@ pub unsafe extern "C" fn tc_task_get_legacy_udas(task: *mut TCTask) -> TCUdaList
                 //  - will be freed by tc_uda_list_free
                 unsafe {
                     TCUda::return_val(Uda {
-                        ns: None,
+                        ns: FzString::Null,
                         key: key.into(),
                         value: value.into(),
                     })
@@ -627,7 +635,7 @@ pub unsafe extern "C" fn tc_task_get_legacy_udas(task: *mut TCTask) -> TCUdaList
 /// Get all dependencies for a task.
 ///
 /// ```c
-/// extern "C" struct TCUuidList tc_task_get_dependencies(struct TCTask *task);
+/// EXTERN_C struct TCUuidList tc_task_get_dependencies(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_dependencies(task: *mut TCTask) -> TCUuidList {
@@ -664,7 +672,7 @@ pub unsafe extern "C" fn tc_task_get_dependencies(task: *mut TCTask) -> TCUuidLi
 ///     if (!success) { ... }
 ///
 /// ```c
-/// extern "C" void tc_task_to_mut(struct TCTask *task, struct TCReplica *tcreplica);
+/// EXTERN_C void tc_task_to_mut(struct TCTask *task, struct TCReplica *tcreplica);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_to_mut(task: *mut TCTask, tcreplica: *mut TCReplica) {
@@ -684,7 +692,7 @@ pub unsafe extern "C" fn tc_task_to_mut(task: *mut TCTask, tcreplica: *mut TCRep
 /// Set a mutable task's status.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_set_status(struct TCTask *task, enum TCStatus status);
+/// EXTERN_C TCResult tc_task_set_status(struct TCTask *task, enum TCStatus status);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_status(task: *mut TCTask, status: TCStatus) -> TCResult {
@@ -703,7 +711,7 @@ pub unsafe extern "C" fn tc_task_set_status(task: *mut TCTask, status: TCStatus)
 /// Set a mutable task's property value by name.  If value.ptr is NULL, the property is removed.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_set_value(struct TCTask *task, struct TCString property, struct TCString value);
+/// EXTERN_C TCResult tc_task_set_value(struct TCTask *task, struct TCString property, struct TCString value);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_value(
@@ -714,24 +722,22 @@ pub unsafe extern "C" fn tc_task_set_value(
     // SAFETY:
     //  - property is valid (promised by caller)
     //  - caller will not use property after this call (convention)
-    let mut property = unsafe { TCString::val_from_arg(property) };
-    let value = if value.is_null() {
-        None
-    } else {
-        // SAFETY:
-        //  - value is valid (promised by caller, after NULL check)
-        //  - caller will not use value after this call (convention)
-        Some(unsafe { TCString::val_from_arg(value) })
-    };
+    let mut property = unsafe { FzString::take(property) };
+    // SAFETY:
+    //  - value is valid (promised by caller, after NULL check)
+    //  - caller will not use value after this call (convention)
+    let mut value = unsafe { FzString::take(value) };
     wrap_mut(
         task,
         |task| {
-            let value_str = if let Some(mut v) = value {
-                Some(v.as_str()?.to_string())
-            } else {
-                None
-            };
-            task.set_value(property.as_str()?.to_string(), value_str)?;
+            let value_str = value.as_str()?.map(|s| s.to_string());
+            task.set_value(
+                property
+                    .as_str()?
+                    .expect("value must not be NULL")
+                    .to_string(),
+                value_str,
+            )?;
             Ok(TCResult::Ok)
         },
         TCResult::Error,
@@ -743,7 +749,7 @@ pub unsafe extern "C" fn tc_task_set_value(
 /// Set a mutable task's description.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_set_description(struct TCTask *task, struct TCString description);
+/// EXTERN_C TCResult tc_task_set_description(struct TCTask *task, struct TCString description);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_description(
@@ -753,11 +759,16 @@ pub unsafe extern "C" fn tc_task_set_description(
     // SAFETY:
     //  - description is valid (promised by caller)
     //  - caller will not use description after this call (convention)
-    let mut description = unsafe { TCString::val_from_arg(description) };
+    let mut description = unsafe { FzString::take(description) };
     wrap_mut(
         task,
         |task| {
-            task.set_description(description.as_str()?.to_string())?;
+            task.set_description(
+                description
+                    .as_str()?
+                    .expect("description must not be NULL")
+                    .to_string(),
+            )?;
             Ok(TCResult::Ok)
         },
         TCResult::Error,
@@ -770,7 +781,7 @@ pub unsafe extern "C" fn tc_task_set_description(
 /// the entry field.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_set_entry(struct TCTask *task, time_t entry);
+/// EXTERN_C TCResult tc_task_set_entry(struct TCTask *task, time_t entry);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_entry(task: *mut TCTask, entry: libc::time_t) -> TCResult {
@@ -790,7 +801,7 @@ pub unsafe extern "C" fn tc_task_set_entry(task: *mut TCTask, entry: libc::time_
 /// Set a mutable task's wait timestamp.  Pass wait=0 to unset the wait field.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_set_wait(struct TCTask *task, time_t wait);
+/// EXTERN_C TCResult tc_task_set_wait(struct TCTask *task, time_t wait);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_wait(task: *mut TCTask, wait: libc::time_t) -> TCResult {
@@ -810,7 +821,7 @@ pub unsafe extern "C" fn tc_task_set_wait(task: *mut TCTask, wait: libc::time_t)
 /// Set a mutable task's modified timestamp.  The value cannot be zero.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_set_modified(struct TCTask *task, time_t modified);
+/// EXTERN_C TCResult tc_task_set_modified(struct TCTask *task, time_t modified);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_modified(
@@ -836,7 +847,7 @@ pub unsafe extern "C" fn tc_task_set_modified(
 /// Start a task.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_start(struct TCTask *task);
+/// EXTERN_C TCResult tc_task_start(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_start(task: *mut TCTask) -> TCResult {
@@ -855,7 +866,7 @@ pub unsafe extern "C" fn tc_task_start(task: *mut TCTask) -> TCResult {
 /// Stop a task.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_stop(struct TCTask *task);
+/// EXTERN_C TCResult tc_task_stop(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_stop(task: *mut TCTask) -> TCResult {
@@ -874,7 +885,7 @@ pub unsafe extern "C" fn tc_task_stop(task: *mut TCTask) -> TCResult {
 /// Mark a task as done.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_done(struct TCTask *task);
+/// EXTERN_C TCResult tc_task_done(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_done(task: *mut TCTask) -> TCResult {
@@ -893,7 +904,7 @@ pub unsafe extern "C" fn tc_task_done(task: *mut TCTask) -> TCResult {
 /// Mark a task as deleted.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_delete(struct TCTask *task);
+/// EXTERN_C TCResult tc_task_delete(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_delete(task: *mut TCTask) -> TCResult {
@@ -912,18 +923,18 @@ pub unsafe extern "C" fn tc_task_delete(task: *mut TCTask) -> TCResult {
 /// Add a tag to a mutable task.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_add_tag(struct TCTask *task, struct TCString tag);
+/// EXTERN_C TCResult tc_task_add_tag(struct TCTask *task, struct TCString tag);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_add_tag(task: *mut TCTask, tag: TCString) -> TCResult {
     // SAFETY:
     //  - tag is valid (promised by caller)
     //  - caller will not use tag after this call (convention)
-    let tcstring = unsafe { TCString::val_from_arg(tag) };
+    let tcstring = unsafe { FzString::take(tag) };
     wrap_mut(
         task,
         |task| {
-            let tag = Tag::try_from(tcstring)?;
+            let tag = try_tag_from_fzstring(tcstring)?;
             task.add_tag(&tag)?;
             Ok(TCResult::Ok)
         },
@@ -936,18 +947,18 @@ pub unsafe extern "C" fn tc_task_add_tag(task: *mut TCTask, tag: TCString) -> TC
 /// Remove a tag from a mutable task.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_remove_tag(struct TCTask *task, struct TCString tag);
+/// EXTERN_C TCResult tc_task_remove_tag(struct TCTask *task, struct TCString tag);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_remove_tag(task: *mut TCTask, tag: TCString) -> TCResult {
     // SAFETY:
     //  - tag is valid (promised by caller)
     //  - caller will not use tag after this call (convention)
-    let tcstring = unsafe { TCString::val_from_arg(tag) };
+    let tcstring = unsafe { FzString::take(tag) };
     wrap_mut(
         task,
         |task| {
-            let tag = Tag::try_from(tcstring)?;
+            let tag = try_tag_from_fzstring(tcstring)?;
             task.remove_tag(&tag)?;
             Ok(TCResult::Ok)
         },
@@ -961,7 +972,7 @@ pub unsafe extern "C" fn tc_task_remove_tag(task: *mut TCTask, tag: TCString) ->
 /// passed annotation, which must not be used after the call returns.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_add_annotation(struct TCTask *task, struct TCAnnotation *annotation);
+/// EXTERN_C TCResult tc_task_add_annotation(struct TCTask *task, struct TCAnnotation *annotation);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_add_annotation(
@@ -977,7 +988,9 @@ pub unsafe extern "C" fn tc_task_add_annotation(
     wrap_mut(
         task,
         |task| {
-            let description = description.into_string()?;
+            let description = description
+                .into_string()?
+                .expect("description must not be NULL");
             task.add_annotation(Annotation { entry, description })?;
             Ok(TCResult::Ok)
         },
@@ -990,7 +1003,7 @@ pub unsafe extern "C" fn tc_task_add_annotation(
 /// Remove an annotation from a mutable task.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_remove_annotation(struct TCTask *task, int64_t entry);
+/// EXTERN_C TCResult tc_task_remove_annotation(struct TCTask *task, int64_t entry);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_remove_annotation(task: *mut TCTask, entry: i64) -> TCResult {
@@ -1009,7 +1022,7 @@ pub unsafe extern "C" fn tc_task_remove_annotation(task: *mut TCTask, entry: i64
 /// Set a UDA on a mutable task.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_set_uda(struct TCTask *task,
+/// EXTERN_C TCResult tc_task_set_uda(struct TCTask *task,
 ///                          struct TCString ns,
 ///                          struct TCString key,
 ///                          struct TCString value);
@@ -1024,15 +1037,19 @@ pub unsafe extern "C" fn tc_task_set_uda(
     // safety:
     //  - ns is valid (promised by caller)
     //  - caller will not use ns after this call (convention)
-    let mut ns = unsafe { TCString::val_from_arg(ns) };
+    let mut ns = unsafe { FzString::take(ns) };
     // SAFETY: same
-    let mut key = unsafe { TCString::val_from_arg(key) };
+    let mut key = unsafe { FzString::take(key) };
     // SAFETY: same
-    let mut value = unsafe { TCString::val_from_arg(value) };
+    let mut value = unsafe { FzString::take(value) };
     wrap_mut(
         task,
         |task| {
-            task.set_uda(ns.as_str()?, key.as_str()?, value.as_str()?.to_string())?;
+            task.set_uda(
+                ns.as_str()?.expect("ns is not NULL"),
+                key.as_str()?.expect("key is not NULL"),
+                value.as_str()?.expect("value is not NULL").to_string(),
+            )?;
             Ok(TCResult::Ok)
         },
         TCResult::Error,
@@ -1044,7 +1061,7 @@ pub unsafe extern "C" fn tc_task_set_uda(
 /// Remove a UDA fraom a mutable task.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_remove_uda(struct TCTask *task, struct TCString ns, struct TCString key);
+/// EXTERN_C TCResult tc_task_remove_uda(struct TCTask *task, struct TCString ns, struct TCString key);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_remove_uda(
@@ -1055,13 +1072,16 @@ pub unsafe extern "C" fn tc_task_remove_uda(
     // safety:
     //  - ns is valid (promised by caller)
     //  - caller will not use ns after this call (convention)
-    let mut ns = unsafe { TCString::val_from_arg(ns) };
+    let mut ns = unsafe { FzString::take(ns) };
     // SAFETY: same
-    let mut key = unsafe { TCString::val_from_arg(key) };
+    let mut key = unsafe { FzString::take(key) };
     wrap_mut(
         task,
         |task| {
-            task.remove_uda(ns.as_str()?, key.as_str()?)?;
+            task.remove_uda(
+                ns.as_str()?.expect("ns is not NULL"),
+                key.as_str()?.expect("ns is not NULL"),
+            )?;
             Ok(TCResult::Ok)
         },
         TCResult::Error,
@@ -1073,7 +1093,7 @@ pub unsafe extern "C" fn tc_task_remove_uda(
 /// Set a legacy UDA on a mutable task.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_set_legacy_uda(struct TCTask *task, struct TCString key, struct TCString value);
+/// EXTERN_C TCResult tc_task_set_legacy_uda(struct TCTask *task, struct TCString key, struct TCString value);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_set_legacy_uda(
@@ -1084,13 +1104,16 @@ pub unsafe extern "C" fn tc_task_set_legacy_uda(
     // safety:
     //  - key is valid (promised by caller)
     //  - caller will not use key after this call (convention)
-    let mut key = unsafe { TCString::val_from_arg(key) };
+    let mut key = unsafe { FzString::take(key) };
     // SAFETY: same
-    let mut value = unsafe { TCString::val_from_arg(value) };
+    let mut value = unsafe { FzString::take(value) };
     wrap_mut(
         task,
         |task| {
-            task.set_legacy_uda(key.as_str()?.to_string(), value.as_str()?.to_string())?;
+            task.set_legacy_uda(
+                key.as_str()?.expect("key is not NULL").to_string(),
+                value.as_str()?.expect("value is not NULL").to_string(),
+            )?;
             Ok(TCResult::Ok)
         },
         TCResult::Error,
@@ -1102,18 +1125,18 @@ pub unsafe extern "C" fn tc_task_set_legacy_uda(
 /// Remove a UDA fraom a mutable task.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_remove_legacy_uda(struct TCTask *task, struct TCString key);
+/// EXTERN_C TCResult tc_task_remove_legacy_uda(struct TCTask *task, struct TCString key);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_remove_legacy_uda(task: *mut TCTask, key: TCString) -> TCResult {
     // safety:
     //  - key is valid (promised by caller)
     //  - caller will not use key after this call (convention)
-    let mut key = unsafe { TCString::val_from_arg(key) };
+    let mut key = unsafe { FzString::take(key) };
     wrap_mut(
         task,
         |task| {
-            task.remove_legacy_uda(key.as_str()?.to_string())?;
+            task.remove_legacy_uda(key.as_str()?.expect("key is not NULL").to_string())?;
             Ok(TCResult::Ok)
         },
         TCResult::Error,
@@ -1125,7 +1148,7 @@ pub unsafe extern "C" fn tc_task_remove_legacy_uda(task: *mut TCTask, key: TCStr
 /// Add a dependency.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_add_dependency(struct TCTask *task, struct TCUuid dep);
+/// EXTERN_C TCResult tc_task_add_dependency(struct TCTask *task, struct TCUuid dep);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_add_dependency(task: *mut TCTask, dep: TCUuid) -> TCResult {
@@ -1147,7 +1170,7 @@ pub unsafe extern "C" fn tc_task_add_dependency(task: *mut TCTask, dep: TCUuid) 
 /// Remove a dependency.
 ///
 /// ```c
-/// extern "C" TCResult tc_task_remove_dependency(struct TCTask *task, struct TCUuid dep);
+/// EXTERN_C TCResult tc_task_remove_dependency(struct TCTask *task, struct TCUuid dep);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_remove_dependency(task: *mut TCTask, dep: TCUuid) -> TCResult {
@@ -1173,7 +1196,7 @@ pub unsafe extern "C" fn tc_task_remove_dependency(task: *mut TCTask, dep: TCUui
 /// The replica passed to `tc_task_to_mut` may be used freely after this call.
 ///
 /// ```c
-/// extern "C" void tc_task_to_immut(struct TCTask *task);
+/// EXTERN_C void tc_task_to_immut(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_to_immut(task: *mut TCTask) {
@@ -1191,7 +1214,7 @@ pub unsafe extern "C" fn tc_task_to_immut(task: *mut TCTask) {
 /// caller must free the returned string.
 ///
 /// ```c
-/// extern "C" struct TCString tc_task_error(struct TCTask *task);
+/// EXTERN_C struct TCString tc_task_error(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_error(task: *mut TCTask) -> TCString {
@@ -1202,9 +1225,10 @@ pub unsafe extern "C" fn tc_task_error(task: *mut TCTask) -> TCString {
     if let Some(rstring) = task.error.take() {
         // SAFETY:
         //  - caller promises to free this value
-        unsafe { TCString::return_val(rstring) }
+        unsafe { rstring.return_val() }
     } else {
-        TCString::default()
+        // SAFETY: (same)
+        unsafe { FzString::Null.return_val() }
     }
 }
 
@@ -1216,7 +1240,7 @@ pub unsafe extern "C" fn tc_task_error(task: *mut TCTask) -> TCString {
 /// If the task is currently mutable, it will first be made immutable.
 ///
 /// ```c
-/// extern "C" void tc_task_free(struct TCTask *task);
+/// EXTERN_C void tc_task_free(struct TCTask *task);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_free(task: *mut TCTask) {
@@ -1244,7 +1268,7 @@ pub unsafe extern "C" fn tc_task_free(task: *mut TCTask) {
 /// The passed TCTaskList remains owned by the caller.
 ///
 /// ```c
-/// extern "C" struct TCTask *tc_task_list_take(struct TCTaskList *tasks, size_t index);
+/// EXTERN_C struct TCTask *tc_task_list_take(struct TCTaskList *tasks, size_t index);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_list_take(tasks: *mut TCTaskList, index: usize) -> *mut TCTask {
@@ -1267,7 +1291,7 @@ pub unsafe extern "C" fn tc_task_list_take(tasks: *mut TCTaskList, index: usize)
 /// When this call returns, the `items` pointer will be NULL, signalling an invalid TCTaskList.
 ///
 /// ```c
-/// extern "C" void tc_task_list_free(struct TCTaskList *tasks);
+/// EXTERN_C void tc_task_list_free(struct TCTaskList *tasks);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_list_free(tasks: *mut TCTaskList) {

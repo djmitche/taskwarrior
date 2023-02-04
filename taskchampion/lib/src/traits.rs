@@ -1,4 +1,5 @@
 use crate::util::vec_into_raw_parts;
+use ffizz_passby::Boxed;
 use std::ptr::NonNull;
 
 /// Support for values passed to Rust by value.  These are represented as full structs in C.  Such
@@ -75,73 +76,6 @@ pub(crate) trait PassByValue: Sized {
     }
 }
 
-/// Support for values passed to Rust by pointer.  These are represented as opaque structs in C,
-/// and always handled as pointers.
-pub(crate) trait PassByPointer: Sized {
-    /// Take a value from C as an argument.
-    ///
-    /// # Safety
-    ///
-    /// - arg must not be NULL
-    /// - arg must be a value returned from Box::into_raw (via return_ptr or ptr_to_arg_out)
-    /// - arg becomes invalid and must not be used after this call
-    unsafe fn take_from_ptr_arg(arg: *mut Self) -> Self {
-        debug_assert!(!arg.is_null());
-        // SAFETY: see docstring
-        unsafe { *(Box::from_raw(arg)) }
-    }
-
-    /// Borrow a value from C as an argument.
-    ///
-    /// # Safety
-    ///
-    /// - arg must not be NULL
-    /// - *arg must be a valid instance of Self
-    /// - arg must be valid for the lifetime assigned by the caller
-    /// - arg must not be modified by anything else during that lifetime
-    unsafe fn from_ptr_arg_ref<'a>(arg: *const Self) -> &'a Self {
-        debug_assert!(!arg.is_null());
-        // SAFETY: see docstring
-        unsafe { &*arg }
-    }
-
-    /// Mutably borrow a value from C as an argument.
-    ///
-    /// # Safety
-    ///
-    /// - arg must not be NULL
-    /// - *arg must be a valid instance of Self
-    /// - arg must be valid for the lifetime assigned by the caller
-    /// - arg must not be accessed by anything else during that lifetime
-    unsafe fn from_ptr_arg_ref_mut<'a>(arg: *mut Self) -> &'a mut Self {
-        debug_assert!(!arg.is_null());
-        // SAFETY: see docstring
-        unsafe { &mut *arg }
-    }
-
-    /// Return a value to C, transferring ownership
-    ///
-    /// # Safety
-    ///
-    /// - the caller must ensure that the value is eventually freed
-    unsafe fn return_ptr(self) -> *mut Self {
-        Box::into_raw(Box::new(self))
-    }
-
-    /// Return a value to C, transferring ownership, via an "output parameter".
-    ///
-    /// # Safety
-    ///
-    /// - the caller must ensure that the value is eventually freed
-    /// - arg_out must not be NULL
-    /// - arg_out must point to valid, properly aligned memory for a pointer value
-    unsafe fn ptr_to_arg_out(self, arg_out: *mut *mut Self) {
-        debug_assert!(!arg_out.is_null());
-        // SAFETY: see docstring
-        unsafe { *arg_out = self.return_ptr() };
-    }
-}
-
 /// Support for C lists of objects referenced by value.
 ///
 /// The underlying C type should have three fields, containing items, length, and capacity.  The
@@ -150,7 +84,7 @@ pub(crate) trait PassByPointer: Sized {
 /// The PassByValue trait will be implemented automatically, converting between the C type and
 /// `Vec<Element>`.
 ///
-/// The element type can be PassByValue or PassByPointer.  If the latter, it should use either
+/// The element type can be PassByValue or BoxedStruct.  If the latter, it should use either
 /// `NonNull<T>` or `Option<NonNull<T>>` to represent the element.  The latter is an "optional
 /// pointer list", where elements can be omitted.
 ///
@@ -232,11 +166,10 @@ where
 /// - List must be non-NULL and point to a valid CL instance
 /// - The caller must not use the value array points to after this function, as
 ///   it has been freed.  It will be replaced with the null value.
-#[allow(dead_code)] // this was useful once, and might be again?
 pub(crate) unsafe fn drop_pointer_list<CL, T>(list: *mut CL)
 where
     CL: CList<Element = NonNull<T>>,
-    T: PassByPointer,
+    T: Sized,
 {
     debug_assert!(!list.is_null());
     // SAFETY:
@@ -247,8 +180,9 @@ where
     for e in vec.drain(..) {
         // SAFETY:
         //  - e is a valid Element (promised by caller)
+        //  - is is not NULL (NonNull)
         //  - e is owned
-        drop(unsafe { PassByPointer::take_from_ptr_arg(e.as_ptr()) });
+        drop(unsafe { Boxed::<T>::take_nonnull(e.as_ptr()) });
     }
     // then drop the vector
     drop(vec);
@@ -268,7 +202,7 @@ where
 pub(crate) unsafe fn drop_optional_pointer_list<CL, T>(list: *mut CL)
 where
     CL: CList<Element = Option<NonNull<T>>>,
-    T: PassByPointer,
+    T: Sized,
 {
     debug_assert!(!list.is_null());
     // SAFETY:
@@ -277,10 +211,14 @@ where
 
     // first, drop each of the elements in turn
     for e in vec.drain(..).flatten() {
+        if e.as_ptr().is_null() {
+            continue;
+        }
         // SAFETY:
         //  - e is a valid Element (promised by caller)
+        //  - e is not NULL (just checked)
         //  - e is owned
-        drop(unsafe { PassByPointer::take_from_ptr_arg(e.as_ptr()) });
+        drop(unsafe { Boxed::<T>::take_nonnull(e.as_ptr()) });
     }
     // then drop the vector
     drop(vec);
@@ -304,7 +242,7 @@ pub(crate) unsafe fn take_optional_pointer_list_item<CL, T>(
 ) -> Option<NonNull<T>>
 where
     CL: CList<Element = Option<NonNull<T>>>,
-    T: PassByPointer,
+    T: Sized,
 {
     debug_assert!(!list.is_null());
 

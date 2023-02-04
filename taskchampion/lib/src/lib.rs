@@ -133,8 +133,6 @@ mod util;
 
 pub mod annotation;
 pub use annotation::*;
-pub mod atomic;
-pub use atomic::*;
 pub mod kv;
 pub use kv::*;
 pub mod replica;
@@ -159,15 +157,15 @@ pub use workingset::*;
 pub(crate) mod types {
     pub(crate) use crate::annotation::{TCAnnotation, TCAnnotationList};
     pub(crate) use crate::kv::{TCKVList, TCKV};
-    pub(crate) use crate::replica::TCReplica;
+    pub(crate) use crate::replica::{BoxedReplica, TCReplica};
     pub(crate) use crate::result::TCResult;
-    pub(crate) use crate::server::TCServer;
+    pub(crate) use crate::server::{BoxedServer, TCServer};
     pub(crate) use crate::status::TCStatus;
     pub(crate) use crate::string::{TCString, TCStringList};
-    pub(crate) use crate::task::{TCTask, TCTaskList};
+    pub(crate) use crate::task::{BoxedTask, TCTask, TCTaskList};
     pub(crate) use crate::uda::{TCUda, TCUdaList, Uda};
     pub(crate) use crate::uuid::{TCUuid, TCUuidList};
-    pub(crate) use crate::workingset::TCWorkingSet;
+    pub(crate) use crate::workingset::{BoxedWorkingSet, TCWorkingSet};
 }
 
 #[cfg(debug_assertions)]

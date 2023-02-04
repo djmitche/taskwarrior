@@ -1,6 +1,8 @@
 use crate::traits::*;
 use crate::types::*;
 use crate::util::err_to_fzstring;
+use crate::util::{chrono_to_time_t, time_t_to_chrono};
+use ffizz_passby::Boxed;
 use ffizz_string::FzString;
 use std::ops::Deref;
 use std::ptr::NonNull;
@@ -66,7 +68,7 @@ enum Inner {
     Invalid,
 }
 
-impl PassByPointer for TCTask {}
+pub(crate) type BoxedTask = Boxed<TCTask>;
 
 impl TCTask {
     /// Make an immutable TCTask into a mutable TCTask.  Does nothing if the task
@@ -82,10 +84,12 @@ impl TCTask {
                 // SAFETY:
                 //  - tcreplica is not null (promised by caller)
                 //  - tcreplica outlives the pointer in this variant (promised by caller)
-                let tcreplica_ref: &mut TCReplica =
-                    unsafe { TCReplica::from_ptr_arg_ref_mut(tcreplica) };
-                let rep_ref = tcreplica_ref.borrow_mut();
-                Inner::Mutable(task.into_mut(rep_ref), tcreplica)
+                unsafe {
+                    BoxedReplica::with_ref_mut_nonnull(tcreplica, |rep| {
+                        let rep_ref = rep.borrow_mut();
+                        Inner::Mutable(task.into_mut(rep_ref), tcreplica)
+                    })
+                }
             }
             Inner::Mutable(task, tcreplica) => Inner::Mutable(task, tcreplica),
             Inner::Invalid => unreachable!(),
@@ -103,10 +107,12 @@ impl TCTask {
                 //  - tcreplica is not null (promised by caller of to_mut, which created this
                 //    variant)
                 //  - tcreplica is still alive (promised by caller of to_mut)
-                let tcreplica_ref: &mut TCReplica =
-                    unsafe { TCReplica::from_ptr_arg_ref_mut(tcreplica) };
-                tcreplica_ref.release_borrow();
-                Inner::Immutable(task.into_immut())
+                unsafe {
+                    BoxedReplica::with_ref_mut_nonnull(tcreplica, |rep| {
+                        rep.release_borrow();
+                        Inner::Immutable(task.into_immut())
+                    })
+                }
             }
             Inner::Invalid => unreachable!(),
         }
@@ -131,14 +137,17 @@ where
     // SAFETY:
     //  - task is not null (promised by caller)
     //  - task outlives this function (promised by caller)
-    let tctask: &mut TCTask = unsafe { TCTask::from_ptr_arg_ref_mut(task) };
-    let task: &Task = match &tctask.inner {
-        Inner::Immutable(t) => t,
-        Inner::Mutable(t, _) => t.deref(),
-        Inner::Invalid => unreachable!(),
-    };
-    tctask.error = None;
-    f(task)
+    unsafe {
+        BoxedTask::with_ref_mut_nonnull(task, |task| {
+            let innertask: &Task = match &task.inner {
+                Inner::Immutable(t) => t,
+                Inner::Mutable(t, _) => t.deref(),
+                Inner::Invalid => unreachable!(),
+            };
+            task.error = None;
+            f(innertask)
+        })
+    }
 }
 
 /// Utility function to get a mutable reference to the underlying Task.  The
@@ -151,19 +160,22 @@ where
     // SAFETY:
     //  - task is not null (promised by caller)
     //  - task outlives this function (promised by caller)
-    let tctask: &mut TCTask = unsafe { TCTask::from_ptr_arg_ref_mut(task) };
-    let task: &mut TaskMut = match tctask.inner {
-        Inner::Immutable(_) => panic!("Task is immutable"),
-        Inner::Mutable(ref mut t, _) => t,
-        Inner::Invalid => unreachable!(),
-    };
-    tctask.error = None;
-    match f(task) {
-        Ok(rv) => rv,
-        Err(e) => {
-            tctask.error = Some(err_to_fzstring(e));
-            err_value
-        }
+    unsafe {
+        BoxedTask::with_ref_mut_nonnull(task, |task| {
+            let innertask: &mut TaskMut = match task.inner {
+                Inner::Immutable(_) => panic!("Task is immutable"),
+                Inner::Mutable(ref mut t, _) => t,
+                Inner::Invalid => unreachable!(),
+            };
+            task.error = None;
+            match f(innertask) {
+                Ok(rv) => rv,
+                Err(e) => {
+                    task.error = Some(err_to_fzstring(e));
+                    err_value
+                }
+            }
+        })
     }
 }
 
@@ -346,7 +358,7 @@ pub unsafe extern "C" fn tc_task_get_value(task: *mut TCTask, property: TCString
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_entry(task: *mut TCTask) -> libc::time_t {
-    wrap(task, |task| libc::time_t::as_ctype(task.get_entry()))
+    wrap(task, |task| chrono_to_time_t(task.get_entry()))
 }
 
 #[ffizz_header::item]
@@ -358,7 +370,7 @@ pub unsafe extern "C" fn tc_task_get_entry(task: *mut TCTask) -> libc::time_t {
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_wait(task: *mut TCTask) -> libc::time_t {
-    wrap(task, |task| libc::time_t::as_ctype(task.get_wait()))
+    wrap(task, |task| chrono_to_time_t(task.get_wait()))
 }
 
 #[ffizz_header::item]
@@ -370,7 +382,7 @@ pub unsafe extern "C" fn tc_task_get_wait(task: *mut TCTask) -> libc::time_t {
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tc_task_get_modified(task: *mut TCTask) -> libc::time_t {
-    wrap(task, |task| libc::time_t::as_ctype(task.get_modified()))
+    wrap(task, |task| chrono_to_time_t(task.get_modified()))
 }
 
 #[ffizz_header::item]
@@ -677,12 +689,15 @@ pub unsafe extern "C" fn tc_task_to_mut(task: *mut TCTask, tcreplica: *mut TCRep
     // SAFETY:
     //  - task is not null (promised by caller)
     //  - task outlives 'a (promised by caller)
-    let tctask: &mut TCTask = unsafe { TCTask::from_ptr_arg_ref_mut(task) };
-    // SAFETY:
-    //  - tcreplica is not NULL (promised by caller)
-    //  - tcreplica lives until later call to to_immut via tc_task_to_immut (promised by caller,
-    //    who cannot call tc_replica_free during this time)
-    unsafe { tctask.to_mut(tcreplica) };
+    unsafe {
+        BoxedTask::with_ref_mut_nonnull(task, |task| {
+            // SAFETY:
+            //  - tcreplica is not NULL (promised by caller)
+            //  - tcreplica lives until later call to to_immut via tc_task_to_immut (promised by caller,
+            //    who cannot call tc_replica_free during this time)
+            unsafe { task.to_mut(tcreplica) };
+        })
+    }
 }
 
 #[ffizz_header::item]
@@ -772,8 +787,7 @@ pub unsafe extern "C" fn tc_task_set_entry(task: *mut TCTask, entry: libc::time_
     wrap_mut(
         task,
         |task| {
-            // SAFETY: any time_t value is a valid timestamp
-            task.set_entry(unsafe { entry.from_ctype() })?;
+            task.set_entry(time_t_to_chrono(entry))?;
             Ok(TCResult::Ok)
         },
         TCResult::Error,
@@ -792,8 +806,7 @@ pub unsafe extern "C" fn tc_task_set_wait(task: *mut TCTask, wait: libc::time_t)
     wrap_mut(
         task,
         |task| {
-            // SAFETY: any time_t value is a valid timestamp
-            task.set_wait(unsafe { wait.from_ctype() })?;
+            task.set_wait(time_t_to_chrono(wait))?;
             Ok(TCResult::Ok)
         },
         TCResult::Error,
@@ -816,8 +829,7 @@ pub unsafe extern "C" fn tc_task_set_modified(
         task,
         |task| {
             task.set_modified(
-                // SAFETY: any time_t value is a valid timestamp
-                unsafe { modified.from_ctype() }
+                time_t_to_chrono(modified)
                     .ok_or_else(|| anyhow::anyhow!("modified cannot be zero"))?,
             )?;
             Ok(TCResult::Ok)
@@ -1182,8 +1194,11 @@ pub unsafe extern "C" fn tc_task_to_immut(task: *mut TCTask) {
     // SAFETY:
     //  - task is not null (promised by caller)
     //  - task outlives 'a (promised by caller)
-    let tctask: &mut TCTask = unsafe { TCTask::from_ptr_arg_ref_mut(task) };
-    tctask.to_immut();
+    unsafe {
+        BoxedTask::with_ref_mut_nonnull(task, |task| {
+            task.to_immut();
+        })
+    }
 }
 
 #[ffizz_header::item]
@@ -1200,14 +1215,17 @@ pub unsafe extern "C" fn tc_task_error(task: *mut TCTask) -> TCString {
     // SAFETY:
     //  - task is not null (promised by caller)
     //  - task outlives 'a (promised by caller)
-    let task: &mut TCTask = unsafe { TCTask::from_ptr_arg_ref_mut(task) };
-    if let Some(rstring) = task.error.take() {
-        // SAFETY:
-        //  - caller promises to free this value
-        unsafe { rstring.return_val() }
-    } else {
-        // SAFETY: (same)
-        unsafe { FzString::Null.return_val() }
+    unsafe {
+        BoxedTask::with_ref_mut_nonnull(task, |task| {
+            if let Some(rstring) = task.error.take() {
+                // SAFETY:
+                //  - caller promises to free this value
+                unsafe { rstring.return_val() }
+            } else {
+                // SAFETY: (same)
+                unsafe { FzString::Null.return_val() }
+            }
+        })
     }
 }
 
@@ -1226,7 +1244,7 @@ pub unsafe extern "C" fn tc_task_free(task: *mut TCTask) {
     // SAFETY:
     //  - task is not NULL (promised by caller)
     //  - caller will not use the TCTask after this (promised by caller)
-    let mut tctask = unsafe { TCTask::take_from_ptr_arg(task) };
+    let mut tctask = unsafe { BoxedTask::take_nonnull(task) };
 
     // convert to immut if it was mutable
     tctask.to_immut();

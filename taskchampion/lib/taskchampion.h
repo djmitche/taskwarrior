@@ -111,6 +111,11 @@ typedef int32_t TCResult;
 // the Null variant.  Note that the Null variant is not necessarily represented as the zero value
 // of the struct.
 //
+// Note that taskchampion functions require that strings given as arguments are not Null, unless
+// documented otherwise.
+//
+// Null strings must still be freed with `tc_string_free`.
+//
 // # Rust Strings and C Strings
 //
 // A Rust string can contain embedded NUL characters, while C considers such a character to mark
@@ -125,9 +130,6 @@ typedef int32_t TCResult;
 // a `*TCString` containing invalid UTF-8.
 //
 // # Safety
-//
-// A TCString with a NULL `ptr` field need not be freed, although tc_free_string will not fail
-// for such a value.
 //
 // A TCString must always be initialized before it is passed as an argument.  Functions
 // returning a `TCString` return an initialized value.
@@ -504,7 +506,7 @@ EXTERN_C struct TCKVList tc_task_get_taskmap(struct TCTask *task);
 
 // Get the named UDA from the task.
 //
-// Returns a TCString with NULL ptr field if the UDA does not exist.
+// Returns a Null TCString if the UDA does not exist.
 EXTERN_C struct TCString tc_task_get_uda(struct TCTask *task, struct TCString ns, struct TCString key);
 
 // Get all UDAs for this task.
@@ -516,7 +518,7 @@ EXTERN_C struct TCUdaList tc_task_get_udas(struct TCTask *task);
 EXTERN_C struct TCUuid tc_task_get_uuid(struct TCTask *task);
 
 // Get a task property's value, or Null if the task has no such property, (including if the
-// property name is Null not valid utf-8).
+// property name is not valid utf-8).
 EXTERN_C struct TCString tc_task_get_value(struct TCTask *task, struct TCString property);
 
 // Get the wait timestamp for a task, or 0 if not set.
@@ -609,7 +611,7 @@ EXTERN_C TCResult tc_task_set_uda(struct TCTask *task,
                          struct TCString key,
                          struct TCString value);
 
-// Set a mutable task's property value by name.  If value.ptr is NULL, the property is removed.
+// Set a mutable task's property value by name.  If value is Null, the property is removed.
 EXTERN_C TCResult tc_task_set_value(struct TCTask *task, struct TCString property, struct TCString value);
 
 // Set a mutable task's wait timestamp.  Pass wait=0 to unset the wait field.
@@ -628,7 +630,7 @@ EXTERN_C TCResult tc_task_stop(struct TCTask *task);
 // The replica passed to `tc_task_to_mut` may be used freely after this call.
 EXTERN_C void tc_task_to_immut(struct TCTask *task);
 
-// Get the latest error for a task, or a string NULL ptr field if the last operation succeeded.
+// Get the latest error for a task, or a Null string if the last operation succeeded.
 // Subsequent calls to this function will return NULL.  The task pointer must not be NULL.  The
 // caller must free the returned string.
 EXTERN_C struct TCString tc_task_error(struct TCTask *task);

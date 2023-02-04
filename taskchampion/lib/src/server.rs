@@ -1,6 +1,7 @@
 use crate::traits::*;
 use crate::types::*;
 use crate::util::err_to_fzstring;
+use ffizz_passby::Boxed;
 use ffizz_string::FzString;
 use taskchampion::{Server, ServerConfig};
 
@@ -20,7 +21,7 @@ use taskchampion::{Server, ServerConfig};
 /// ```
 pub struct TCServer(Box<dyn Server>);
 
-impl PassByPointer for TCServer {}
+pub(crate) type BoxedServer = Boxed<TCServer>;
 
 impl From<Box<dyn Server>> for TCServer {
     fn from(server: Box<dyn Server>) -> TCServer {
@@ -84,7 +85,7 @@ pub unsafe extern "C" fn tc_server_new_local(
             };
             let server = server_config.into_server()?;
             // SAFETY: caller promises to free this server.
-            Ok(unsafe { TCServer::return_ptr(server.into()) })
+            Ok(unsafe { BoxedServer::return_val(server.into()) })
         },
         error_out,
         std::ptr::null_mut(),
@@ -139,7 +140,7 @@ pub unsafe extern "C" fn tc_server_new_remote(
             };
             let server = server_config.into_server()?;
             // SAFETY: caller promises to free this server.
-            Ok(unsafe { TCServer::return_ptr(server.into()) })
+            Ok(unsafe { BoxedServer::return_val(server.into()) })
         },
         error_out,
         std::ptr::null_mut(),
@@ -161,6 +162,6 @@ pub unsafe extern "C" fn tc_server_free(server: *mut TCServer) {
     //  - server is not NULL
     //  - server came from tc_server_new_.., which used return_ptr
     //  - server will not be used after (promised by caller)
-    let server = unsafe { TCServer::take_from_ptr_arg(server) };
+    let server = unsafe { BoxedServer::take_nonnull(server) };
     drop(server);
 }

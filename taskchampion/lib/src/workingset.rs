@@ -1,5 +1,6 @@
 use crate::traits::*;
 use crate::types::*;
+use ffizz_passby::Boxed;
 use taskchampion::{Uuid, WorkingSet};
 
 #[ffizz_header::item]
@@ -33,7 +34,7 @@ use taskchampion::{Uuid, WorkingSet};
 /// ```
 pub struct TCWorkingSet(WorkingSet);
 
-impl PassByPointer for TCWorkingSet {}
+pub(crate) type BoxedWorkingSet = Boxed<TCWorkingSet>;
 
 impl From<WorkingSet> for TCWorkingSet {
     fn from(ws: WorkingSet) -> TCWorkingSet {
@@ -49,8 +50,7 @@ where
     // SAFETY:
     //  - ws is not null (promised by caller)
     //  - ws outlives 'a (promised by caller)
-    let tcws: &TCWorkingSet = unsafe { TCWorkingSet::from_ptr_arg_ref(ws) };
-    f(&tcws.0)
+    unsafe { BoxedWorkingSet::with_ref_nonnull(ws, |ws| f(&ws.0)) }
 }
 
 #[ffizz_header::item]
@@ -136,6 +136,6 @@ pub unsafe extern "C" fn tc_working_set_free(ws: *mut TCWorkingSet) {
     // SAFETY:
     //  - rep is not NULL (promised by caller)
     //  - caller will not use the TCWorkingSet after this (promised by caller)
-    let ws = unsafe { TCWorkingSet::take_from_ptr_arg(ws) };
+    let ws = unsafe { BoxedWorkingSet::take_nonnull(ws) };
     drop(ws);
 }

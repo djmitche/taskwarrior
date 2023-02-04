@@ -705,8 +705,6 @@ dependencies = [
 [[package]]
 name = "ffizz-header"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b62f1544408f6e999f312966653ffc32976de08d63457ec6dace9840ae5aae50"
 dependencies = [
  "ffizz-macros",
  "itertools",
@@ -716,8 +714,6 @@ dependencies = [
 [[package]]
 name = "ffizz-macros"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "670bd37b580f9d38587452cdd061214d985b67cce940cda7ef3a92c36760fbe8"
 dependencies = [
  "itertools",
  "proc-macro2",
@@ -728,14 +724,10 @@ dependencies = [
 [[package]]
 name = "ffizz-passby"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dda6618228684a7838a46b83d8f7b3859b0edb885a10573bb8b9c8066bae5b0"
 
 [[package]]
 name = "ffizz-string"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98a3a3bebe1d988cb095d6fbce30ee480deaaa53678c444aa43540aec0c09bbf"
 dependencies = [
  "ffizz-header",
  "ffizz-passby",

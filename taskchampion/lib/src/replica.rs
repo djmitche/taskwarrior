@@ -1,6 +1,7 @@
 use crate::traits::*;
 use crate::types::*;
 use crate::util::err_to_fzstring;
+use ffizz_passby::Boxed;
 use ffizz_string::FzString;
 use std::ptr::NonNull;
 use taskchampion::{Replica, StorageConfig};
@@ -46,16 +47,20 @@ pub struct TCReplica {
     error: Option<FzString<'static>>,
 }
 
-impl PassByPointer for TCReplica {}
+pub(crate) type BoxedReplica = Boxed<TCReplica>;
 
 impl TCReplica {
-    /// Mutably borrow the inner Replica
-    pub(crate) fn borrow_mut(&mut self) -> &mut Replica {
+    /// Mutably borrow the inner Replica, returning a reference with static
+    /// lifetime.
+    pub(crate) fn borrow_mut(&mut self) -> &'static mut Replica {
         if self.mut_borrowed {
             panic!("replica is already borrowed");
         }
         self.mut_borrowed = true;
-        &mut self.inner
+        // SAFETY:
+        //  - ownership is tracked by `mut_borrowed`, so this will not be accessed
+        //    mutably until `release_borrow`.
+        unsafe { &mut *(&mut self.inner as *mut Replica) }
     }
 
     /// Release the borrow made by [`borrow_mut`]
@@ -89,17 +94,20 @@ where
     //  - *rep is a valid TCReplica (promised by caller)
     //  - rep is valid for the duration of this function
     //  - rep is not modified by anything else (not threadsafe)
-    let rep: &mut TCReplica = unsafe { TCReplica::from_ptr_arg_ref_mut(rep) };
-    if rep.mut_borrowed {
-        panic!("replica is borrowed and cannot be used");
-    }
-    rep.error = None;
-    match f(&mut rep.inner) {
-        Ok(v) => v,
-        Err(e) => {
-            rep.error = Some(err_to_fzstring(e));
-            err_value
-        }
+    unsafe {
+        BoxedReplica::with_ref_mut_nonnull(rep, |rep| {
+            if rep.mut_borrowed {
+                panic!("replica is borrowed and cannot be used");
+            }
+            rep.error = None;
+            match f(&mut rep.inner) {
+                Ok(v) => v,
+                Err(e) => {
+                    rep.error = Some(err_to_fzstring(e));
+                    err_value
+                }
+            }
+        })
     }
 }
 
@@ -139,7 +147,7 @@ pub unsafe extern "C" fn tc_replica_new_in_memory() -> *mut TCReplica {
         .expect("in-memory always succeeds");
     // SAFETY:
     // - caller promises to free this value
-    unsafe { TCReplica::from(Replica::new(storage)).return_ptr() }
+    unsafe { BoxedReplica::return_val(Replica::new(storage).into()) }
 }
 
 #[ffizz_header::item]
@@ -173,7 +181,7 @@ pub unsafe extern "C" fn tc_replica_new_on_disk(
 
             // SAFETY:
             // - caller promises to free this value
-            Ok(unsafe { TCReplica::from(Replica::new(storage)).return_ptr() })
+            Ok(unsafe { BoxedReplica::return_val(Replica::new(storage).into()) })
         },
         error_out,
         std::ptr::null_mut(),
@@ -205,9 +213,9 @@ pub unsafe extern "C" fn tc_replica_all_tasks(rep: *mut TCReplica) -> TCTaskList
                         NonNull::new(
                             // SAFETY:
                             // - caller promises to free this value (via freeing the list)
-                            unsafe { TCTask::from(t).return_ptr() },
+                            unsafe { BoxedTask::return_val(t.into()) },
                         )
-                        .expect("TCTask::return_ptr returned NULL"),
+                        .expect("BoxedTask::return_val returned NULL"),
                     )
                 })
                 .collect();
@@ -268,7 +276,7 @@ pub unsafe extern "C" fn tc_replica_working_set(rep: *mut TCReplica) -> *mut TCW
             let ws = rep.working_set()?;
             // SAFETY:
             // - caller promises to free this value
-            Ok(unsafe { TCWorkingSet::return_ptr(ws.into()) })
+            Ok(unsafe { BoxedWorkingSet::return_val(ws.into()) })
         },
         std::ptr::null_mut(),
     )
@@ -296,7 +304,7 @@ pub unsafe extern "C" fn tc_replica_get_task(rep: *mut TCReplica, tcuuid: TCUuid
             if let Some(task) = rep.get_task(uuid)? {
                 // SAFETY:
                 // - caller promises to free this task
-                Ok(unsafe { TCTask::from(task).return_ptr() })
+                Ok(unsafe { BoxedTask::return_val(task.into()) })
             } else {
                 Ok(std::ptr::null_mut())
             }
@@ -332,7 +340,7 @@ pub unsafe extern "C" fn tc_replica_new_task(
             let task = rep.new_task(status.into(), description.as_str_nonnull()?.to_string())?;
             // SAFETY:
             // - caller promises to free this task
-            Ok(unsafe { TCTask::from(task).return_ptr() })
+            Ok(unsafe { BoxedTask::return_val(task.into()) })
         },
         std::ptr::null_mut(),
     )
@@ -362,7 +370,7 @@ pub unsafe extern "C" fn tc_replica_import_task_with_uuid(
             let task = rep.import_task_with_uuid(uuid)?;
             // SAFETY:
             // - caller promises to free this task
-            Ok(unsafe { TCTask::from(task).return_ptr() })
+            Ok(unsafe { BoxedTask::return_val(task.into()) })
         },
         std::ptr::null_mut(),
     )
@@ -392,9 +400,12 @@ pub unsafe extern "C" fn tc_replica_sync(
             //  - *server is a valid TCServer (promised by caller)
             //  - server is valid for the lifetime of tc_replica_sync (not threadsafe)
             //  - server will not be accessed simultaneously (not threadsafe)
-            let server = unsafe { TCServer::from_ptr_arg_ref_mut(server) };
-            rep.sync(server.as_mut(), avoid_snapshots)?;
-            Ok(TCResult::Ok)
+            unsafe {
+                BoxedServer::with_ref_mut_nonnull(server, |server| {
+                    rep.sync(server.as_mut(), avoid_snapshots)?;
+                    Ok(TCResult::Ok)
+                })
+            }
         },
         TCResult::Error,
     )
@@ -529,14 +540,17 @@ pub unsafe extern "C" fn tc_replica_error(rep: *mut TCReplica) -> TCString {
     //  - *rep is a valid TCReplica (promised by caller)
     //  - rep is valid for the duration of this function
     //  - rep is not modified by anything else (not threadsafe)
-    let rep: &mut TCReplica = unsafe { TCReplica::from_ptr_arg_ref_mut(rep) };
-    if let Some(fzstring) = rep.error.take() {
-        // SAFETY:
-        // - caller promises to free this string
-        unsafe { fzstring.return_val() }
-    } else {
-        // SAFETY: (same)
-        unsafe { FzString::Null.return_val() }
+    unsafe {
+        BoxedReplica::with_ref_mut_nonnull(rep, |rep| {
+            if let Some(fzstring) = rep.error.take() {
+                // SAFETY:
+                // - caller promises to free this string
+                unsafe { fzstring.return_val() }
+            } else {
+                // SAFETY: (same)
+                unsafe { FzString::Null.return_val() }
+            }
+        })
     }
 }
 
@@ -554,7 +568,7 @@ pub unsafe extern "C" fn tc_replica_free(rep: *mut TCReplica) {
     //  - replica is not NULL (promised by caller)
     //  - replica is valid (promised by caller)
     //  - caller will not use description after this call (promised by caller)
-    let replica = unsafe { TCReplica::take_from_ptr_arg(rep) };
+    let replica = unsafe { BoxedReplica::take_nonnull(rep) };
     if replica.mut_borrowed {
         panic!("replica is borrowed and cannot be freed");
     }

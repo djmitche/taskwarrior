@@ -1,5 +1,6 @@
 use crate::traits::*;
 use crate::types::*;
+use crate::util::{chrono_to_time_t, time_t_to_chrono};
 use ffizz_string::FzString;
 use taskchampion::chrono::prelude::*;
 
@@ -48,7 +49,7 @@ impl PassByValue for TCAnnotation {
         // SAFETY:
         //  - any time_t value is valid
         //  - time_t is copy, so ownership is not important
-        let entry = unsafe { libc::time_t::val_from_arg(self.entry) }.unwrap();
+        let entry = unsafe { time_t_to_chrono(self.entry) }.unwrap();
         // SAFETY:
         //  - self.description is valid (came from return_val in as_ctype)
         //  - self is owned, so we can take ownership of this TCString
@@ -58,7 +59,7 @@ impl PassByValue for TCAnnotation {
 
     fn as_ctype((entry, description): Self::RustType) -> Self {
         TCAnnotation {
-            entry: libc::time_t::as_ctype(Some(entry)),
+            entry: chrono_to_time_t(Some(entry)),
             // SAFETY:
             //  - ownership of the TCString tied to ownership of Self
             description: unsafe { description.return_val() },

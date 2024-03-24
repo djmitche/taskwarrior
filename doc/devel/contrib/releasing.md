@@ -18,4 +18,8 @@ To release Taskwarrior, follow this process:
 - Find the tag under https://github.com/GothenburgBitFactory/taskwarrior/tags and create a release from it
   - Give it a clever title if you can think of one; refer to previous releases
   - Include the tarball from earlier
-- Add a new item in `content/news` on https://github.com/GothenburgBitFactory/tw.org
+- Update https://github.com/GothenburgBitFactory/tw.org
+  - Add a new item in `content/news`
+  - Add the tarball in `content/download`
+  - Update the data in `data/projects.json` and `data/releases.json`. Use your imagination regarding the next version.
+  - Update `content/download/index.html`
